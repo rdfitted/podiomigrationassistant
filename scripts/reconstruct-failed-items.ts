@@ -6,7 +6,7 @@
 
 import { getPodioHttpClient } from '../lib/podio/http/client';
 import { streamItems, extractFieldValue } from '../lib/podio/resources/items';
-import { migrationStateStore } from '../lib/migration/state-store';
+import { migrationStateStore, MigrationJob } from '../lib/migration/state-store';
 
 const MIGRATION_ID = 'c250d83d-6281-476d-957e-f3f3ab11504f';
 const SOURCE_APP_ID = 24867466;
@@ -107,7 +107,7 @@ async function reconstructFailedItems() {
       ...job.progress,
       failedItems,
     },
-  };
+  } as MigrationJob;
 
   await migrationStateStore.saveMigrationJob(updatedJob);
   console.log('✓ Migration state updated with failedItems array');

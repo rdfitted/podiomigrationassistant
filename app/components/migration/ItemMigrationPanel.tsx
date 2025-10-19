@@ -5,6 +5,7 @@ import { useItemMigration } from '@/app/hooks/useItemMigration';
 import { ItemMigrationProgress } from './ItemMigrationProgress';
 import { FieldMappingEditor } from './FieldMappingEditor';
 import { AppFieldInfo } from './FieldMappingRow';
+import { ResumptionConfig } from '@/lib/migration/items/types';
 
 export interface ItemMigrationPanelProps {
   sourceAppId?: number;
@@ -69,6 +70,11 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
 
   const currentMapping = fieldMappingOverride || fieldMapping;
   const isUsingCustomMapping = !!fieldMappingOverride;
+
+  // Calculate actual failed count (source of truth: failedItems.length)
+  const actualFailedCount = jobStatus
+    ? Math.max(jobStatus.progress?.failed || 0, jobStatus.failedItems?.length || 0)
+    : 0;
 
   // Fetch field structures when app IDs change
   useEffect(() => {
@@ -519,31 +525,46 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
             )}
 
             {jobStatus.status === 'paused' && (
-              <ResumeButton jobId={jobId} />
+              <ResumeButton jobId={jobId} resumption={jobStatus.resumption} />
             )}
 
             {/* Retry Failed Items Button - Show when there are failed items */}
-            {jobId && jobStatus.progress && jobStatus.progress.failed > 0 &&
+            {jobId && jobStatus && actualFailedCount > 0 &&
              (jobStatus.status === 'completed' || jobStatus.status === 'failed' || jobStatus.status === 'paused') && (
-              <button
-                onClick={() => retryFailedItems(jobId)}
-                disabled={isRetrying}
-                className="flex-1 py-2 px-4 bg-orange-600 hover:bg-orange-700 disabled:bg-orange-400 text-white rounded-md font-medium transition-colors disabled:cursor-not-allowed flex items-center justify-center gap-2"
-              >
-                {isRetrying ? (
-                  <>
-                    <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                    </svg>
-                    Retrying...
-                  </>
-                ) : (
-                  <>
-                    🔄 Retry {jobStatus.progress.failed} Failed Items
-                  </>
+              <div className="flex-1 flex flex-col gap-2">
+                {/* Retry attempts info */}
+                {jobStatus.retryAttempts !== undefined && jobStatus.retryAttempts > 0 && (
+                  <div className="text-xs text-gray-600 dark:text-gray-400 px-2">
+                    <span className="font-medium">Previous retry attempts:</span> {jobStatus.retryAttempts}
+                    {jobStatus.lastRetryTimestamp && (
+                      <span className="ml-2">
+                        (Last: {new Date(jobStatus.lastRetryTimestamp).toLocaleString()})
+                      </span>
+                    )}
+                  </div>
                 )}
-              </button>
+
+                {/* Retry button */}
+                <button
+                  onClick={() => retryFailedItems(jobId)}
+                  disabled={isRetrying}
+                  className="w-full py-2 px-4 bg-orange-600 hover:bg-orange-700 disabled:bg-orange-400 text-white rounded-md font-medium transition-colors disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                  {isRetrying ? (
+                    <>
+                      <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                      </svg>
+                      Retrying...
+                    </>
+                  ) : (
+                    <>
+                      🔄 Retry {actualFailedCount.toLocaleString()} Failed Items
+                    </>
+                  )}
+                </button>
+              </div>
             )}
 
             {(jobStatus.status === 'completed' || jobStatus.status === 'failed' || jobStatus.status === 'paused') && (
@@ -623,7 +644,7 @@ function PauseButton({ jobId }: { jobId: string }) {
 /**
  * Resume Button Component
  */
-function ResumeButton({ jobId }: { jobId: string }) {
+function ResumeButton({ jobId, resumption }: { jobId: string; resumption?: ResumptionConfig }) {
   const [isResuming, setIsResuming] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -650,11 +671,30 @@ function ResumeButton({ jobId }: { jobId: string }) {
   };
 
   return (
-    <>
+    <div className="flex-1 flex flex-col gap-2">
+      {/* Resumption context */}
+      {resumption && (
+        <div className="text-xs text-gray-600 dark:text-gray-400 px-2">
+          <span className="font-medium">Resume from:</span>{' '}
+          {resumption.lastProcessedItemId && (
+            <span>Item ID {resumption.lastProcessedItemId}</span>
+          )}
+          {resumption.offset !== undefined && (
+            <span className="ml-2">(offset: {resumption.offset})</span>
+          )}
+          {resumption.lastProcessedTimestamp && (
+            <span className="ml-2">
+              ({new Date(resumption.lastProcessedTimestamp).toLocaleString()})
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Resume button */}
       <button
         onClick={handleResume}
         disabled={isResuming}
-        className="flex-1 py-2 px-4 bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white rounded-md font-medium transition-colors disabled:cursor-not-allowed flex items-center justify-center gap-2"
+        className="w-full py-2 px-4 bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white rounded-md font-medium transition-colors disabled:cursor-not-allowed flex items-center justify-center gap-2"
       >
         {isResuming ? (
           <>
@@ -670,12 +710,14 @@ function ResumeButton({ jobId }: { jobId: string }) {
           </>
         )}
       </button>
+
+      {/* Error display */}
       {error && (
-        <div className="text-xs text-red-600 dark:text-red-400 mt-1">
+        <div className="text-xs text-red-600 dark:text-red-400">
           {error}
         </div>
       )}
-    </>
+    </div>
   );
 }
 

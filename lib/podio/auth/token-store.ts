@@ -44,11 +44,10 @@ export class FileTokenStore implements TokenStore {
       const data = await fs.readFile(this.filePath, 'utf-8');
       const parsed = JSON.parse(data) as StoredTokenData;
 
-      // Validate token hasn't expired
+      // Return token even if expired - let auth manager decide whether to refresh or obtain new
+      // The auth manager will use the refresh token if available
       if (parsed.metadata.expiresAt < Date.now()) {
-        podioLog('info', 'Stored token expired, clearing cache');
-        await this.clearToken();
-        return null;
+        podioLog('info', 'Stored token is expired, but returning for potential refresh');
       }
 
       return parsed;
@@ -101,9 +100,7 @@ export class MemoryTokenStore implements TokenStore {
   private token: StoredTokenData | null = null;
 
   async getToken(): Promise<StoredTokenData | null> {
-    if (this.token && this.token.metadata.expiresAt < Date.now()) {
-      this.token = null;
-    }
+    // Return token even if expired - let auth manager decide whether to refresh
     return this.token;
   }
 
@@ -142,10 +139,24 @@ export function shouldRefreshToken(metadata: TokenMetadata): boolean {
  * Helper function to save tokens using the default file store
  */
 export async function saveTokens(tokens: AuthTokens): Promise<void> {
+  podioLog('info', 'saveTokens called', {
+    hasAccessToken: !!tokens.access_token,
+    hasRefreshToken: !!tokens.refresh_token,
+    expiresIn: tokens.expires_in,
+  });
+
   const store = new FileTokenStore();
   const storedData: StoredTokenData = {
     tokens,
     metadata: createTokenMetadata(tokens),
   };
+
+  podioLog('info', 'Saving tokens to file store', {
+    filePath: 'logs/podio-token-cache.json',
+    expiresAt: new Date(storedData.metadata.expiresAt).toISOString(),
+  });
+
   await store.setToken(storedData);
+
+  podioLog('info', 'Tokens saved successfully');
 }

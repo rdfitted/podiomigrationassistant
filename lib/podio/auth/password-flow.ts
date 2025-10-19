@@ -9,9 +9,16 @@ import {
 import { podioLog, logTokenRefresh } from '../logging';
 
 /**
+ * ⚠️ DEPRECATED - DO NOT USE
+ *
+ * This function is no longer supported and will fail. The password grant flow
+ * has been removed from the auth system. Use the authorization code flow instead
+ * (via /api/auth/callback) to obtain initial tokens.
+ *
  * Obtain access token using OAuth 2.0 password flow
  * Reference: aidocs/Podio API/02-authentication.md
  *
+ * @deprecated Use authorization code flow via /api/auth/callback instead
  * @param config - Podio configuration with credentials
  * @returns {Promise<AuthTokens>} OAuth tokens from Podio
  * @throws {PodioAuthError} If authentication fails

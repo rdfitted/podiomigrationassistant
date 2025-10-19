@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { ItemMigrationStatusResponse } from '@/lib/migration/items/types';
+import { FailedItemsSection } from './FailedItemsSection';
 
 export interface ItemMigrationProgressProps {
   jobStatus: ItemMigrationStatusResponse;
@@ -39,6 +40,13 @@ function getTimeRemaining(eta: string): string {
  */
 export function ItemMigrationProgress({ jobStatus, isActive }: ItemMigrationProgressProps) {
   const { status, progress, errors } = jobStatus;
+
+  // Calculate actual failed count from failedItems array (source of truth)
+  // This handles cases where progress.failed is stale but failedItems is accurate
+  const actualFailed = Math.max(
+    progress.failed,
+    jobStatus.failedItems?.length || 0
+  );
 
   const statusColors: Record<string, string> = {
     planning: 'bg-gray-200 dark:bg-gray-700',
@@ -122,7 +130,7 @@ export function ItemMigrationProgress({ jobStatus, isActive }: ItemMigrationProg
         <div className="bg-red-50 dark:bg-red-900/20 p-3 rounded-md">
           <div className="text-sm text-red-700 dark:text-red-400">Failed</div>
           <div className="text-2xl font-bold text-red-800 dark:text-red-300">
-            {progress.failed.toLocaleString()}
+            {actualFailed.toLocaleString()}
           </div>
         </div>
       </div>
@@ -312,8 +320,54 @@ export function ItemMigrationProgress({ jobStatus, isActive }: ItemMigrationProg
             <div className="mt-2 text-xs text-orange-600 dark:text-orange-500">
               💡 Each retry processes only failed items without re-indexing
             </div>
+
+            {/* Previous Run Summary (Snapshot) */}
+            {jobStatus.preRetrySnapshot && (
+              <details className="mt-3">
+                <summary className="cursor-pointer text-xs font-medium text-orange-700 dark:text-orange-400 hover:text-orange-800 dark:hover:text-orange-300">
+                  📊 Previous Run Summary
+                </summary>
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  <div className="bg-white/50 dark:bg-black/20 p-2 rounded">
+                    <div className="text-xs text-gray-600 dark:text-gray-400">Processed</div>
+                    <div className="text-sm font-bold text-gray-900 dark:text-white">
+                      {jobStatus.preRetrySnapshot.processed.toLocaleString()}
+                    </div>
+                  </div>
+                  <div className="bg-white/50 dark:bg-black/20 p-2 rounded">
+                    <div className="text-xs text-green-700 dark:text-green-400">Successful</div>
+                    <div className="text-sm font-bold text-green-800 dark:text-green-300">
+                      {jobStatus.preRetrySnapshot.successful.toLocaleString()}
+                    </div>
+                  </div>
+                  <div className="bg-white/50 dark:bg-black/20 p-2 rounded">
+                    <div className="text-xs text-red-700 dark:text-red-400">Failed</div>
+                    <div className="text-sm font-bold text-red-800 dark:text-red-300">
+                      {jobStatus.preRetrySnapshot.failed.toLocaleString()}
+                    </div>
+                  </div>
+                  <div className="bg-white/50 dark:bg-black/20 p-2 rounded">
+                    <div className="text-xs text-gray-600 dark:text-gray-400">Progress</div>
+                    <div className="text-sm font-bold text-gray-900 dark:text-white">
+                      {jobStatus.preRetrySnapshot.percent}%
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                  Last updated: {new Date(jobStatus.preRetrySnapshot.lastUpdate).toLocaleString()}
+                </div>
+              </details>
+            )}
           </div>
         </div>
+      )}
+
+      {/* Failed Items Section */}
+      {jobStatus.failedItems && jobStatus.failedItems.length > 0 && (
+        <FailedItemsSection
+          failedItems={jobStatus.failedItems}
+          errorsByCategory={jobStatus.errorsByCategory}
+        />
       )}
     </div>
   );

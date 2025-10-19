@@ -4,12 +4,12 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { migrationStateStore } from '@/lib/migration/state-store';
+import { migrationStateStore, MigrationJob } from '@/lib/migration/state-store';
 import { getPodioHttpClient } from '@/lib/podio/http/client';
 import { streamItems, extractFieldValue } from '@/lib/podio/resources/items';
 
 export const runtime = 'nodejs';
-export const maxDuration = 300; // 5 minutes
+export const maxDuration = 7200; // 2 hours
 
 export async function POST(
   request: NextRequest,
@@ -128,7 +128,7 @@ export async function POST(
         ...job.progress,
         failedItems,
       },
-    };
+    } as MigrationJob;
 
     await migrationStateStore.saveMigrationJob(updatedJob);
     console.log('✓ Migration state updated with failedItems array');

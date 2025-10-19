@@ -162,6 +162,18 @@ export async function getItemMigrationJob(
     })),
     retryAttempts: metadata?.retryAttempts || 0,
     lastRetryTimestamp: metadata?.lastRetryTimestamp,
+    preRetrySnapshot: job.progress?.preRetrySnapshot
+      ? {
+          total: job.progress.preRetrySnapshot.total,
+          processed: job.progress.preRetrySnapshot.processed,
+          successful: job.progress.preRetrySnapshot.successful,
+          failed: job.progress.preRetrySnapshot.failed,
+          percent: job.progress.preRetrySnapshot.percent,
+          lastUpdate: typeof job.progress.preRetrySnapshot.lastUpdate === 'string'
+            ? job.progress.preRetrySnapshot.lastUpdate
+            : job.progress.preRetrySnapshot.lastUpdate.toISOString(),
+        }
+      : undefined,
   };
 }
 

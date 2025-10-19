@@ -66,6 +66,31 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
         jobId,
         failedItemCount: retryItemIds.length,
       });
+
+      // Save snapshot of current progress before clearing for retry
+      // This preserves the pre-retry state for display in the dashboard
+      logger.info('Saving pre-retry snapshot', { jobId });
+      if (job.progress) {
+        job.progress.preRetrySnapshot = {
+          total: job.progress.total,
+          processed: job.progress.processed,
+          successful: job.progress.successful,
+          failed: job.progress.failed,
+          percent: job.progress.percent,
+          lastUpdate: job.progress.lastUpdate,
+        };
+      }
+
+      // Clear the old failedItems array and reset counters before starting retry
+      // New failures will be added via addFailedItem() during this retry attempt
+      logger.info('Clearing old failed items list and resetting counters for retry', { jobId });
+      if (job.progress) {
+        job.progress.failedItems = [];
+        job.progress.failed = 0; // Reset failed counter to stay in sync with failedItems array
+        job.progress.processed = 0; // Reset processed counter for fresh retry stats
+        job.progress.successful = 0; // Reset successful counter for fresh retry stats
+        await migrationStateStore.saveMigrationJob(job);
+      }
     }
 
     // Update status to in_progress

@@ -177,6 +177,15 @@ export interface ItemMigrationStatusResponse {
   retryAttempts?: number;
   /** Timestamp of last retry attempt */
   lastRetryTimestamp?: string;
+  /** Snapshot of progress before retry was initiated (for displaying previous run state) */
+  preRetrySnapshot?: {
+    total: number;
+    processed: number;
+    successful: number;
+    failed: number;
+    percent: number;
+    lastUpdate: string;
+  };
 }
 
 /**

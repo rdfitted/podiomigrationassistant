@@ -94,6 +94,18 @@ export interface ThroughputMetrics {
 }
 
 /**
+ * Migration progress snapshot (simple version for storing pre-retry state)
+ */
+export interface ProgressSnapshot {
+  total: number;
+  processed: number;
+  successful: number;
+  failed: number;
+  percent: number;
+  lastUpdate: Date;
+}
+
+/**
  * Migration progress snapshot
  */
 export interface MigrationProgress {
@@ -106,6 +118,8 @@ export interface MigrationProgress {
   throughput?: ThroughputMetrics;
   batchCheckpoints?: MigrationBatchCheckpoint[];
   failedItems?: FailedItemDetail[];
+  /** Snapshot of progress before retry was initiated (for displaying pre-retry state) */
+  preRetrySnapshot?: ProgressSnapshot;
 }
 
 /**

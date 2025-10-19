@@ -1,6 +1,6 @@
 import { PodioConfig, loadPodioConfig } from '../config';
 import { PodioAuthError } from '../errors';
-import { obtainPasswordToken, refreshAccessToken } from './password-flow';
+import { refreshAccessToken } from './password-flow';
 import {
   TokenStore,
   FileTokenStore,
@@ -14,10 +14,13 @@ import { podioLog } from '../logging';
  * PodioAuthManager manages OAuth token lifecycle
  *
  * Features:
- * - Automatic token refresh (5-minute pre-expiry window)
- * - Token persistence to avoid repeated password grants
+ * - Automatic token refresh using refresh tokens (5-minute pre-expiry window)
+ * - Token persistence with file-based caching
  * - Concurrency-safe token refresh (prevents parallel refresh requests)
  * - Server-side only (do not use in client components)
+ *
+ * Note: This manager does NOT support password grant flow. Initial tokens must be
+ * obtained via the authorization code flow (e.g., through /api/auth/callback endpoint).
  */
 export class PodioAuthManager {
   private config: PodioConfig;
@@ -45,19 +48,35 @@ export class PodioAuthManager {
     const storedData = await this.tokenStore.getToken();
 
     if (storedData) {
-      // Check if token needs refresh
-      if (shouldRefreshToken(storedData.metadata)) {
-        podioLog('info', 'Token within refresh window, refreshing proactively');
-        return this.refreshTokenWithLock(storedData);
+      // Check if token is expired or needs refresh
+      const now = Date.now();
+      const isExpired = now >= storedData.metadata.expiresAt;
+      const needsRefresh = shouldRefreshToken(storedData.metadata);
+
+      if (isExpired || needsRefresh) {
+        // Token is expired or within refresh window - attempt refresh if we have a refresh token
+        if (storedData.tokens.refresh_token) {
+          podioLog('info', isExpired ? 'Token expired, attempting refresh' : 'Token within refresh window, refreshing proactively');
+          return this.refreshTokenWithLock(storedData);
+        } else {
+          // No refresh token available - cannot proceed
+          podioLog('error', 'Token expired but no refresh token available');
+          await this.tokenStore.clearToken();
+          throw new PodioAuthError(
+            'No refresh token available. Please obtain an initial token using the authorization flow.'
+          );
+        }
       }
 
       // Token is still valid
       return storedData.tokens.access_token;
     }
 
-    // No cached token, obtain new one via password grant
-    podioLog('info', 'No cached token found, obtaining via password grant');
-    return this.obtainNewToken();
+    // No cached token - user must obtain initial token manually
+    podioLog('error', 'No cached token found - initial token required');
+    throw new PodioAuthError(
+      'No authentication token found. Please obtain an initial token using the authorization flow (e.g., via /api/auth/callback).'
+    );
   }
 
   /**
@@ -70,8 +89,17 @@ export class PodioAuthManager {
     const storedData = await this.tokenStore.getToken();
 
     if (!storedData) {
-      podioLog('warn', 'Force refresh requested but no token cached, obtaining new token');
-      return this.obtainNewToken();
+      podioLog('error', 'Force refresh requested but no token cached');
+      throw new PodioAuthError(
+        'Cannot force refresh without a cached token. Please obtain an initial token using the authorization flow.'
+      );
+    }
+
+    if (!storedData.tokens.refresh_token) {
+      podioLog('error', 'Force refresh requested but no refresh token available');
+      throw new PodioAuthError(
+        'Cannot force refresh without a refresh token. Please obtain a new token using the authorization flow.'
+      );
     }
 
     return this.refreshTokenWithLock(storedData);
@@ -85,26 +113,6 @@ export class PodioAuthManager {
     podioLog('info', 'Tokens cleared from cache');
   }
 
-  /**
-   * Obtain new token via password grant and cache it
-   */
-  private async obtainNewToken(): Promise<string> {
-    try {
-      const tokens = await obtainPasswordToken(this.config);
-      const metadata = createTokenMetadata(tokens);
-
-      await this.tokenStore.setToken({ tokens, metadata });
-
-      return tokens.access_token;
-    } catch (error) {
-      if (error instanceof PodioAuthError) {
-        throw error;
-      }
-      throw new PodioAuthError(
-        `Failed to obtain new token: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
-  }
 
   /**
    * Refresh token with concurrency lock to prevent parallel refreshes
