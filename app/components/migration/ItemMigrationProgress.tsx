@@ -54,6 +54,7 @@ export function ItemMigrationProgress({ jobStatus, isActive }: ItemMigrationProg
     completed: 'bg-green-200 dark:bg-green-900',
     failed: 'bg-red-200 dark:bg-red-900',
     paused: 'bg-yellow-200 dark:bg-yellow-900',
+    cancelled: 'bg-gray-200 dark:bg-gray-700',
   };
 
   const statusTextColors: Record<string, string> = {
@@ -62,6 +63,7 @@ export function ItemMigrationProgress({ jobStatus, isActive }: ItemMigrationProg
     completed: 'text-green-800 dark:text-green-200',
     failed: 'text-red-800 dark:text-red-200',
     paused: 'text-yellow-800 dark:text-yellow-200',
+    cancelled: 'text-gray-800 dark:text-gray-200',
   };
 
   const statusIcons: Record<string, string> = {
@@ -70,6 +72,7 @@ export function ItemMigrationProgress({ jobStatus, isActive }: ItemMigrationProg
     completed: '✅',
     failed: '❌',
     paused: '⏸️',
+    cancelled: '🚫',
   };
 
   return (

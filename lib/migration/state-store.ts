@@ -6,7 +6,7 @@ import { logger } from './logging';
 /**
  * Migration job status types
  */
-export type MigrationJobStatus = 'planning' | 'in_progress' | 'completed' | 'failed' | 'paused';
+export type MigrationJobStatus = 'planning' | 'in_progress' | 'completed' | 'failed' | 'paused' | 'cancelled';
 
 /**
  * Migration job types

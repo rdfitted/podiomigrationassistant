@@ -530,7 +530,7 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
 
             {/* Retry Failed Items Button - Show when there are failed items */}
             {jobId && jobStatus && actualFailedCount > 0 &&
-             (jobStatus.status === 'completed' || jobStatus.status === 'failed' || jobStatus.status === 'paused') && (
+             (jobStatus.status === 'completed' || jobStatus.status === 'failed' || jobStatus.status === 'paused' || jobStatus.status === 'cancelled') && (
               <div className="flex-1 flex flex-col gap-2">
                 {/* Retry attempts info */}
                 {jobStatus.retryAttempts !== undefined && jobStatus.retryAttempts > 0 && (
@@ -567,7 +567,7 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
               </div>
             )}
 
-            {(jobStatus.status === 'completed' || jobStatus.status === 'failed' || jobStatus.status === 'paused') && (
+            {(jobStatus.status === 'completed' || jobStatus.status === 'failed' || jobStatus.status === 'paused' || jobStatus.status === 'cancelled') && (
               <button
                 onClick={reset}
                 className="flex-1 py-2 px-4 border border-gray-300 dark:border-gray-600 rounded-md font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
@@ -731,6 +731,7 @@ function StatusBadge({ status }: { status: string }) {
     failed: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200',
     paused: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200',
     planning: 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200',
+    cancelled: 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200',
   };
 
   const statusLabels: Record<string, string> = {
@@ -739,6 +740,7 @@ function StatusBadge({ status }: { status: string }) {
     failed: 'Failed',
     paused: 'Paused',
     planning: 'Planning',
+    cancelled: 'Cancelled',
   };
 
   return (
