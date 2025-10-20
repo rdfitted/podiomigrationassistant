@@ -332,6 +332,11 @@ export class ItemMigrator {
       // Determine if this is a retry operation FIRST
       const isRetry = config.retryItemIds && config.retryItemIds.length > 0;
 
+      // Validate: UPDATE mode does not support retry operations
+      if (isRetry && config.mode === 'update') {
+        throw new Error('Retry mode is not supported for UPDATE operations. UPDATE mode requires matching existing items, which cannot be retried.');
+      }
+
       // Initialize pre-fetch cache if duplicate checking is enabled
       // BUT skip it in retry mode (we don't need duplicate detection for retries)
       let prefetchCache: PrefetchCache | null = null;

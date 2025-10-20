@@ -134,6 +134,7 @@ export interface ItemMigrationJob {
 export interface ItemMigrationStatusResponse {
   jobId: string;
   status: 'planning' | 'in_progress' | 'completed' | 'failed' | 'paused' | 'cancelled';
+  mode: 'create' | 'update' | 'upsert';
   progress: {
     total: number;
     processed: number;

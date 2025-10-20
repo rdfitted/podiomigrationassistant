@@ -528,8 +528,9 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
               <ResumeButton jobId={jobId} resumption={jobStatus.resumption} />
             )}
 
-            {/* Retry Failed Items Button - Show when there are failed items */}
+            {/* Retry Failed Items Button - Show when there are failed items (not available for UPDATE mode) */}
             {jobId && jobStatus && actualFailedCount > 0 &&
+             jobStatus.mode !== 'update' &&
              (jobStatus.status === 'completed' || jobStatus.status === 'failed' || jobStatus.status === 'paused' || jobStatus.status === 'cancelled') && (
               <div className="flex-1 flex flex-col gap-2">
                 {/* Retry attempts info */}

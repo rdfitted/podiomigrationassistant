@@ -109,6 +109,7 @@ export async function getItemMigrationJob(
   return {
     jobId: job.id,
     status: job.status,
+    mode: metadata.mode || 'create',
     progress: job.progress
       ? {
           total: job.progress.total,
