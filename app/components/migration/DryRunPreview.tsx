@@ -239,7 +239,7 @@ export function DryRunPreview({ preview, onExecute, onReset }: DryRunPreviewProp
                 >
                   <button
                     onClick={() => toggleItemExpanded(item.sourceItemId)}
-                    className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-gray-50 dark:hover:bg-gray-750"
+                    className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-gray-50 dark:hover:bg-gray-700"
                   >
                     <div className="flex items-center gap-3">
                       <span className="text-green-600 dark:text-green-400">+</span>
@@ -306,7 +306,7 @@ export function DryRunPreview({ preview, onExecute, onReset }: DryRunPreviewProp
                 >
                   <button
                     onClick={() => toggleItemExpanded(item.sourceItemId)}
-                    className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-gray-50 dark:hover:bg-gray-750"
+                    className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-gray-50 dark:hover:bg-gray-700"
                   >
                     <div className="flex items-center gap-3">
                       <span className="text-green-600 dark:text-green-400">✓</span>

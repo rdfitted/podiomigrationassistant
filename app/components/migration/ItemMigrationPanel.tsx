@@ -154,8 +154,9 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
     setValidationError(null);
     setValidationProgress(null);
 
-    // Only validate for CREATE mode
-    if (mode === 'create') {
+    // Only validate for CREATE mode when not in dry-run
+    // (validation creates/deletes test items, which violates dry-run contract)
+    if (mode === 'create' && !dryRun) {
       setIsValidating(true);
 
       try {
