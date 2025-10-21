@@ -777,6 +777,7 @@ export class ItemMigrator {
                       itemsToUpdate.push({
                         itemId: existingItem.item_id,
                         fields: mappedFields,
+                        sourceItemId: sourceItem.item_id, // Track source item ID for error reporting
                       });
                       continue;
                     }
@@ -844,6 +845,7 @@ export class ItemMigrator {
                   itemsToUpdate.push({
                     itemId: existingItem.item_id,
                     fields: mappedFields,
+                    sourceItemId: sourceItem.item_id, // Track source item ID for error reporting
                   });
                 } else {
                   migrationLogger.warn('Item not found for update', {
@@ -982,7 +984,7 @@ export class ItemMigrator {
       if (updateResult) {
         for (const item of updateResult.failedItems) {
           result.failedItems.push({
-            sourceItemId: 0, // Update doesn't track source ID
+            sourceItemId: item.sourceItemId || 0, // Now tracked from batch processor
             error: item.error,
             index: item.index,
           });
@@ -990,7 +992,7 @@ export class ItemMigrator {
           // Save to state store with classified error
           if (item.classifiedError) {
             await migrationStateStore.addFailedItem(migrationJob.id, {
-              sourceItemId: 0,
+              sourceItemId: item.sourceItemId || 0, // Now tracked from batch processor
               targetItemId: (item.data as any).itemId,
               error: item.error,
               errorCategory: item.classifiedError.category,

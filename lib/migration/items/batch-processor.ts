@@ -323,7 +323,7 @@ export class ItemBatchProcessor extends EventEmitter {
    * Process a batch of update operations
    */
   async processUpdate(
-    updates: Array<{ itemId: number; fields: Record<string, unknown> }>
+    updates: Array<{ itemId: number; fields: Record<string, unknown>; sourceItemId?: number }>
   ): Promise<BatchResult> {
     this.stats.total = updates.length;
     this.stats.processed = 0;
@@ -438,6 +438,7 @@ export class ItemBatchProcessor extends EventEmitter {
             error: failure.error,
             data: { itemId: failure.itemId, fields: failure.fields },
             classifiedError,
+            sourceItemId: batch[failure.index]?.sourceItemId, // Track source item ID
           });
         });
 

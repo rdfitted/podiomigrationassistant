@@ -17,19 +17,29 @@ import { logger as migrationLogger } from '../logging';
  * Normalize a value for consistent matching
  * Handles strings, numbers, arrays, and objects
  *
- * Returns empty string for "empty" values: null, undefined, "", 0, false
+ * Returns empty string for "empty" values: null, undefined, ""
+ * Note: 0 and false are VALID values and will be matched
  * Caller should skip empty values (don't match empty to empty)
  */
 function normalizeValue(value: unknown): string {
-  // UPDATED: Treat 0, false, "", null, undefined as empty
+  // Only treat null, undefined, and empty string as empty
+  // 0 and false are VALID values that should be matched
   if (
     value === null ||
     value === undefined ||
-    value === '' ||
-    value === 0 ||
-    value === false
+    value === ''
   ) {
     return '';
+  }
+
+  // Handle false explicitly (normalize to "false" string)
+  if (value === false) {
+    return 'false';
+  }
+
+  // Handle zero explicitly (normalize to "0" string)
+  if (value === 0) {
+    return '0';
   }
 
   // Handle arrays (multi-value fields)
@@ -234,7 +244,7 @@ export class PrefetchCache {
                 itemId: item.item_id,
                 matchField,
                 matchValue,
-                reason: 'Empty values are not cached (we don\'t match empties)',
+                reason: 'Empty values (null, undefined, "") are not cached',
               });
             }
           } else {
@@ -301,13 +311,13 @@ export class PrefetchCache {
   isDuplicate(matchValue: unknown): boolean {
     const normalizedKey = normalizeValue(matchValue);
 
-    // UPDATED: Skip empty values - don't match empty to empty
+    // Skip empty values - don't match empty to empty
     if (!normalizedKey || normalizedKey === '') {
       this.misses++;
       migrationLogger.debug('Skipping empty match value', {
         matchField: this.matchField,
         matchValue,
-        reason: 'Empty values are not matched',
+        reason: 'Empty values (null, undefined, "") are not matched',
       });
       return false;
     }
@@ -360,13 +370,13 @@ export class PrefetchCache {
   getExistingItem(matchValue: unknown): PodioItem | null {
     const normalizedKey = normalizeValue(matchValue);
 
-    // UPDATED: Skip empty values - don't match empty to empty
+    // Skip empty values - don't match empty to empty
     if (!normalizedKey || normalizedKey === '') {
       this.misses++;
       migrationLogger.debug('Skipping empty match value', {
         matchField: this.matchField,
         matchValue,
-        reason: 'Empty values are not matched',
+        reason: 'Empty values (null, undefined, "") are not matched',
       });
       return null;
     }
