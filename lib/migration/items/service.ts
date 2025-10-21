@@ -261,6 +261,7 @@ export async function convertFieldMappingToExternalIds(
  * Build default field mapping between two apps
  * Maps fields by external_id first, then by label if no external_id match
  * Automatically excludes read-only target fields that cannot be set via API
+ * Automatically excludes app relationship fields to prevent unintended app-to-app references
  */
 export async function buildDefaultFieldMapping(
   sourceAppId: number,
@@ -283,12 +284,27 @@ export async function buildDefaultFieldMapping(
       'app_item_id_icon' // App item ID display field
     ];
 
+    // Field types to skip in auto-matching
+    const skipAutoMatchFieldTypes = [
+      'app' // App relationship fields - skip to prevent unintended app-to-app references
+    ];
+
     // First pass: match by external_id
     for (const sourceField of sourceApp.fields || []) {
+      // Skip app relationship fields in auto-matching
+      if (skipAutoMatchFieldTypes.includes(sourceField.type)) {
+        logger.debug('Skipping app relationship field in auto-match', {
+          sourceField: sourceField.external_id || sourceField.label,
+          type: sourceField.type,
+        });
+        continue;
+      }
+
       if (sourceField.external_id) {
         const targetField = targetApp.fields?.find(
           (f) => f.external_id === sourceField.external_id &&
-                 !readOnlyFieldTypes.includes(f.type) // Exclude read-only target fields
+                 !readOnlyFieldTypes.includes(f.type) && // Exclude read-only target fields
+                 !skipAutoMatchFieldTypes.includes(f.type) // Skip app fields
         );
         if (targetField) {
           mapping[sourceField.field_id.toString()] = targetField.field_id.toString();
@@ -303,12 +319,18 @@ export async function buildDefaultFieldMapping(
 
     // Second pass: match by label for unmapped fields
     for (const sourceField of sourceApp.fields || []) {
+      // Skip app relationship fields in auto-matching
+      if (skipAutoMatchFieldTypes.includes(sourceField.type)) {
+        continue;
+      }
+
       if (!mapping[sourceField.field_id.toString()]) {
         const targetField = targetApp.fields?.find(
           (f) =>
             f.label === sourceField.label &&
             f.type === sourceField.type &&
             !readOnlyFieldTypes.includes(f.type) && // Exclude read-only target fields
+            !skipAutoMatchFieldTypes.includes(f.type) && // Skip app fields
             !Object.values(mapping).includes(f.field_id.toString())
         );
         if (targetField) {
