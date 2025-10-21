@@ -276,7 +276,9 @@ export async function getItemMigrationJob(
             : job.progress.preRetrySnapshot.lastUpdate.toISOString(),
         }
       : undefined,
-  };
+    // Include dry-run preview if available
+    dryRunPreview: metadata?.dryRunPreview || undefined,
+  } as any;
 }
 
 /**

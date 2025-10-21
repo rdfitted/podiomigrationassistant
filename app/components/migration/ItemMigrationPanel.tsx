@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { useItemMigration } from '@/app/hooks/useItemMigration';
 import { ItemMigrationProgress } from './ItemMigrationProgress';
+import { DryRunPreview } from './DryRunPreview';
 import { FieldMappingEditor } from './FieldMappingEditor';
 import { AppFieldInfo } from './FieldMappingRow';
 import { ResumptionConfig } from '@/lib/migration/items/types';
@@ -42,6 +43,7 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
   const [batchSize, setBatchSize] = useState<number>(500);
   const [concurrency, setConcurrency] = useState<number>(5);
   const [maxItems, setMaxItems] = useState<number | undefined>(undefined);
+  const [dryRun, setDryRun] = useState<boolean>(false); // Dry-run mode toggle
   const [showFieldMapping, setShowFieldMapping] = useState(false);
   const [showPastMigrations, setShowPastMigrations] = useState(false);
   const [pastMigrations, setPastMigrations] = useState<MigrationListItem[]>([]);
@@ -192,7 +194,7 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
       }
     }
 
-    // Step 2: Start actual migration
+    // Step 2: Start actual migration (or dry-run)
     await startMigration({
       mode,
       sourceMatchField: sourceMatchField || undefined,
@@ -202,6 +204,7 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
       concurrency,
       stopOnError: false,
       maxItems,
+      dryRun, // Pass dry-run parameter
     });
   };
 
@@ -565,6 +568,30 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
             </p>
           </div>
 
+          {/* Dry-Run Mode - Only show for UPDATE mode */}
+          {mode === 'update' && (
+            <div className="bg-blue-50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-800 rounded-md p-4">
+              <label className="flex items-start cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={dryRun}
+                  onChange={(e) => setDryRun(e.target.checked)}
+                  className="mt-0.5 mr-3 h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+                  disabled={isCreating}
+                />
+                <div>
+                  <span className="text-sm font-medium text-blue-900 dark:text-blue-100">
+                    🔍 Dry-Run Mode (Preview Changes)
+                  </span>
+                  <p className="mt-1 text-xs text-blue-700 dark:text-blue-300">
+                    Preview exactly what would change without executing any updates.
+                    See field-by-field changes, identify missing matches, and skip items with no changes.
+                  </p>
+                </div>
+              </label>
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
@@ -650,11 +677,18 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
             disabled={!canStart || isValidating}
             className={`w-full py-2 px-4 rounded-md font-medium transition-colors ${
               canStart && !isValidating
-                ? 'bg-blue-600 hover:bg-blue-700 text-white'
+                ? dryRun
+                  ? 'bg-green-600 hover:bg-green-700 text-white'
+                  : 'bg-blue-600 hover:bg-blue-700 text-white'
                 : 'bg-gray-300 dark:bg-gray-700 text-gray-500 dark:text-gray-400 cursor-not-allowed'
             }`}
           >
-            {isValidating ? 'Validating...' : isCreating ? 'Starting Migration...' : 'Start Item Migration'}
+            {isValidating
+              ? 'Validating...'
+              : isCreating
+                ? dryRun ? 'Generating Preview...' : 'Starting Migration...'
+                : dryRun ? '🔍 Preview Changes (Dry-Run)' : 'Start Item Migration'
+            }
           </button>
 
           {validationMessage && (
@@ -686,12 +720,29 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
         </div>
       )}
 
-      {/* Progress Display */}
+      {/* Progress Display or Dry-Run Preview */}
       {jobId && jobStatus && (
         <div className="mt-4">
-          <ItemMigrationProgress jobStatus={jobStatus} isActive={isActive} />
+          {/* Show Dry-Run Preview if available */}
+          {(jobStatus as any).dryRunPreview ? (
+            <DryRunPreview
+              preview={(jobStatus as any).dryRunPreview}
+              onExecute={() => {
+                // Reset and run again without dry-run
+                setDryRun(false);
+                reset();
+                setTimeout(() => {
+                  handleStartMigration();
+                }, 100);
+              }}
+              onReset={reset}
+            />
+          ) : (
+            <ItemMigrationProgress jobStatus={jobStatus} isActive={isActive} />
+          )}
 
           {/* Pause/Resume/Retry/Reset Controls */}
+          {!(jobStatus as any).dryRunPreview && (
           <div className="mt-4 flex gap-2">
             {jobStatus.status === 'in_progress' && (
               <PauseButton jobId={jobId} />
@@ -750,6 +801,7 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
               </button>
             )}
           </div>
+          )}
         </div>
       )}
     </div>
