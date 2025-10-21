@@ -16,6 +16,8 @@ import {
   findItemByFieldValue,
   extractFieldValue,
   fetchItemsByIds,
+  createItem,
+  deleteItem,
 } from '../../podio/resources/items';
 import { ItemBatchProcessor, BatchProcessorConfig } from './batch-processor';
 import { migrationStateStore, MigrationJob } from '../state-store';
@@ -208,6 +210,165 @@ export class ItemMigrator {
   }
 
   /**
+   * Fetch first N items from source app for validation testing
+   */
+  private async fetchFirstNItems(appId: number, count: number): Promise<PodioItem[]> {
+    migrationLogger.info('Fetching first N items for validation', { appId, count });
+
+    const items: PodioItem[] = [];
+
+    for await (const batch of streamItems(this.client, appId, { batchSize: count })) {
+      items.push(...batch.slice(0, count - items.length));
+      if (items.length >= count) break;
+    }
+
+    migrationLogger.info('Fetched items for validation', {
+      appId,
+      requested: count,
+      fetched: items.length,
+    });
+
+    return items;
+  }
+
+  /**
+   * Validate field mapping by creating test items
+   * Tests with first 3 source items to ensure mappings work
+   *
+   * @returns Validation result with success status and any errors
+   */
+  async validateFieldMapping(config: MigrationConfig): Promise<{
+    valid: boolean;
+    error?: string;
+    testedItems: number;
+    successfulCreates: number;
+    failedCreates: number;
+    testItemIds: number[];
+  }> {
+    migrationLogger.info('Starting field mapping validation');
+
+    // Step 1: Fetch first 3 items from source app
+    const testSourceItems = await this.fetchFirstNItems(config.sourceAppId, 3);
+
+    if (testSourceItems.length === 0) {
+      return {
+        valid: false,
+        error: 'Source app is empty - no items to migrate',
+        testedItems: 0,
+        successfulCreates: 0,
+        failedCreates: 0,
+        testItemIds: [],
+      };
+    }
+
+    const testItemIds: number[] = [];
+    const errors: string[] = [];
+    let successCount = 0;
+
+    // Step 2: Convert field mapping to external IDs
+    const externalIdFieldMapping = await convertFieldMappingToExternalIds(
+      config.fieldMapping,
+      config.sourceAppId,
+      config.targetAppId
+    );
+
+    // Step 3: Try to create each test item
+    for (const [index, sourceItem] of testSourceItems.entries()) {
+      try {
+        migrationLogger.info(`Testing item ${index + 1}/${testSourceItems.length}`, {
+          sourceItemId: sourceItem.item_id,
+        });
+
+        // Map fields
+        const mappedFields = mapItemFields(sourceItem, externalIdFieldMapping);
+
+        // Attempt create
+        const response = await createItem(
+          this.client,
+          config.targetAppId,
+          {
+            fields: mappedFields,
+            external_id: `validation-test-${Date.now()}-${index}`,
+          },
+          {
+            hook: false,  // Don't trigger webhooks for test
+            silent: true, // Don't send notifications
+          }
+        );
+
+        testItemIds.push(response.item_id);
+        successCount++;
+
+        migrationLogger.info(`Test item ${index + 1} created successfully`, {
+          sourceItemId: sourceItem.item_id,
+          testItemId: response.item_id,
+        });
+
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        errors.push(`Item ${index + 1} (ID: ${sourceItem.item_id}): ${errorMsg}`);
+
+        migrationLogger.error(`Test item ${index + 1} failed`, {
+          sourceItemId: sourceItem.item_id,
+          error: errorMsg,
+        });
+      }
+    }
+
+    // Step 4: Clean up - delete test items
+    if (testItemIds.length > 0) {
+      migrationLogger.info('Cleaning up test items', {
+        count: testItemIds.length,
+      });
+
+      for (const itemId of testItemIds) {
+        try {
+          await deleteItem(this.client, itemId);
+          migrationLogger.debug('Test item deleted', { itemId });
+        } catch (error) {
+          // CRITICAL: If we can't delete test items, abort migration
+          const errorMsg = error instanceof Error ? error.message : String(error);
+          migrationLogger.error('Failed to delete test item - ABORTING', {
+            itemId,
+            error: errorMsg,
+          });
+
+          return {
+            valid: false,
+            error: `Failed to delete test item ${itemId}: ${errorMsg}. Please manually delete test items before retrying.`,
+            testedItems: testSourceItems.length,
+            successfulCreates: successCount,
+            failedCreates: errors.length,
+            testItemIds,
+          };
+        }
+      }
+
+      migrationLogger.info('All test items deleted successfully');
+    }
+
+    // Step 5: Return validation result
+    if (errors.length > 0) {
+      return {
+        valid: false,
+        error: `Field mapping validation failed:\n${errors.join('\n')}`,
+        testedItems: testSourceItems.length,
+        successfulCreates: successCount,
+        failedCreates: errors.length,
+        testItemIds: [],
+      };
+    }
+
+    return {
+      valid: true,
+      testedItems: testSourceItems.length,
+      successfulCreates: successCount,
+      failedCreates: 0,
+      testItemIds: [],
+    };
+  }
+
+  /**
    * Execute a migration
    */
   async executeMigration(config: MigrationConfig): Promise<MigrationResult> {
@@ -218,6 +379,28 @@ export class ItemMigrator {
       targetAppId: config.targetAppId,
       mode: config.mode,
     });
+
+    // ONLY validate for CREATE mode
+    if (config.mode === 'create') {
+      migrationLogger.info('Validating field mapping before migration');
+
+      const validationResult = await this.validateFieldMapping(config);
+
+      if (!validationResult.valid) {
+        // Validation failed - throw error immediately
+        throw new Error(
+          `Field mapping validation failed:\n\n${validationResult.error}\n\n` +
+          `Please check your field mappings and ensure field types are compatible.\n` +
+          `Tested ${validationResult.testedItems} items: ` +
+          `${validationResult.successfulCreates} succeeded, ${validationResult.failedCreates} failed.`
+        );
+      }
+
+      migrationLogger.info('Field mapping validation passed', {
+        testedItems: validationResult.testedItems,
+        successfulCreates: validationResult.successfulCreates,
+      });
+    }
 
     // Create migration job
     const migrationJob = await migrationStateStore.createMigrationJob(
@@ -353,9 +536,18 @@ export class ItemMigrator {
           targetMatchField
         );
 
+        // ADDED: Enhanced logging with cache statistics
+        const cacheStats = prefetchCache.getCacheStats();
         migrationLogger.info('Pre-fetch complete', {
-          cachedItems: prefetchCache.size(),
+          targetAppId: config.targetAppId,
           matchField: targetMatchField,
+          cachedItems: prefetchCache.size(),
+          cacheStats: {
+            uniqueKeys: cacheStats.uniqueKeys,
+            totalItems: cacheStats.totalItems,
+            hits: cacheStats.hits,
+            misses: cacheStats.misses,
+          },
         });
       }
 
@@ -562,6 +754,18 @@ export class ItemMigrator {
                         fromCache: true,
                       }
                     );
+
+                    // ADDED: Extra debug log for troubleshooting match failures
+                    migrationLogger.debug('No duplicate found - match details', {
+                      sourceItemId: sourceItem.item_id,
+                      sourceMatchField,
+                      targetMatchField,
+                      rawMatchValue: matchValue,
+                      matchValueType: typeof matchValue,
+                      isArray: Array.isArray(matchValue),
+                      isEmpty: !matchValue || matchValue === '' || matchValue === 0 || matchValue === false,
+                      cacheSize: prefetchCache?.size() || 0,
+                    });
                   }
                 } else {
                   // Source match field not found - skip item to prevent potential duplicate

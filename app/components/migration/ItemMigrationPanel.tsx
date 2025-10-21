@@ -52,6 +52,15 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
   const [targetFields, setTargetFields] = useState<AppFieldInfo[]>([]);
   const [isLoadingFields, setIsLoadingFields] = useState(false);
 
+  // Validation state
+  const [isValidating, setIsValidating] = useState(false);
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const [validationProgress, setValidationProgress] = useState<{
+    testedItems: number;
+    successfulCreates: number;
+    failedCreates: number;
+  } | null>(null);
+
   const {
     jobId,
     jobStatus,
@@ -139,6 +148,51 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
   };
 
   const handleStartMigration = async () => {
+    // Clear previous validation state
+    setValidationError(null);
+    setValidationProgress(null);
+
+    // Only validate for CREATE mode
+    if (mode === 'create') {
+      setIsValidating(true);
+
+      try {
+        // Step 1: Validate field mappings
+        const validationResponse = await fetch('/api/migration/items/validate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sourceAppId,
+            targetAppId,
+            fieldMapping: currentMapping,
+          }),
+        });
+
+        const validationResult = await validationResponse.json();
+
+        setValidationProgress({
+          testedItems: validationResult.testedItems,
+          successfulCreates: validationResult.successfulCreates,
+          failedCreates: validationResult.failedCreates,
+        });
+
+        if (!validationResult.valid) {
+          setValidationError(validationResult.error);
+          setIsValidating(false);
+          return; // STOP - don't proceed with migration
+        }
+
+        // Validation passed!
+        setIsValidating(false);
+
+      } catch (error) {
+        setValidationError(error instanceof Error ? error.message : String(error));
+        setIsValidating(false);
+        return;
+      }
+    }
+
+    // Step 2: Start actual migration
     await startMigration({
       mode,
       sourceMatchField: sourceMatchField || undefined,
@@ -163,6 +217,46 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
   } else if (hasEitherMatchField && !hasBothMatchFields) {
     validationMessage = 'Both source and target match fields must be set (or both empty)';
   }
+
+  // Field type validation for match fields
+  const VALID_MATCH_FIELD_TYPES = ['text', 'number', 'calculation'];
+
+  const validateMatchFieldTypes = (
+    sourceFieldType: string | undefined,
+    targetFieldType: string | undefined
+  ): { valid: boolean; warning?: string } => {
+    if (!sourceFieldType || !targetFieldType) {
+      return { valid: true };
+    }
+
+    // Check if both types are in valid list
+    const sourceValid = VALID_MATCH_FIELD_TYPES.includes(sourceFieldType);
+    const targetValid = VALID_MATCH_FIELD_TYPES.includes(targetFieldType);
+
+    if (!sourceValid && !targetValid) {
+      return {
+        valid: false,
+        warning: `Neither field type is supported for matching. Source is '${sourceFieldType}', target is '${targetFieldType}'. Supported types: text, number, calculation.`,
+      };
+    }
+
+    if (!sourceValid) {
+      return {
+        valid: false,
+        warning: `Source field type '${sourceFieldType}' is not recommended for matching. Supported types: text, number, calculation.`,
+      };
+    }
+
+    if (!targetValid) {
+      return {
+        valid: false,
+        warning: `Target field type '${targetFieldType}' is not recommended for matching. Supported types: text, number, calculation.`,
+      };
+    }
+
+    // Both valid - return success
+    return { valid: true };
+  };
 
   const canStart = sourceAppId && targetAppId && !jobId && !isCreating && !validationMessage;
   const isActive = !!(jobId && (isPolling || jobStatus?.status === 'in_progress'));
@@ -370,6 +464,39 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
             {mode === 'upsert' && 'Required: Both fields must be set (update if exists, create if not)'}
           </div>
 
+          {/* Field Type Warning */}
+          {sourceMatchField && targetMatchField && (() => {
+            const sourceField = sourceFields.find(f => f.external_id === sourceMatchField);
+            const targetField = targetFields.find(f => f.external_id === targetMatchField);
+            const validation = validateMatchFieldTypes(sourceField?.type, targetField?.type);
+
+            if (validation.warning) {
+              return (
+                <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-md p-3">
+                  <div className="flex">
+                    <div className="flex-shrink-0">
+                      <svg className="h-5 w-5 text-yellow-400" viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                      </svg>
+                    </div>
+                    <div className="ml-3">
+                      <h3 className="text-sm font-medium text-yellow-800 dark:text-yellow-200">
+                        Field Type Warning
+                      </h3>
+                      <p className="mt-1 text-sm text-yellow-700 dark:text-yellow-300">
+                        {validation.warning}
+                      </p>
+                      <p className="mt-2 text-xs text-yellow-600 dark:text-yellow-400">
+                        You can proceed, but matching may not work as expected. The pre-flight validation will test your configuration.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              );
+            }
+            return null;
+          })()}
+
           {/* Duplicate Behavior - only show for CREATE mode with both match fields */}
           {mode === 'create' && sourceMatchField && targetMatchField && (
             <div>
@@ -472,16 +599,62 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
             </div>
           </div>
 
+          {/* Validation Progress */}
+          {isValidating && (
+            <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-md p-4">
+              <div className="flex items-center">
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600 mr-3"></div>
+                <span className="text-sm font-medium text-blue-900 dark:text-blue-100">
+                  Validating field mappings...
+                </span>
+              </div>
+              {validationProgress && (
+                <div className="mt-2 text-xs text-blue-700 dark:text-blue-300">
+                  Testing with {validationProgress.testedItems} sample items
+                  {validationProgress.successfulCreates > 0 && (
+                    <span className="ml-2">✓ {validationProgress.successfulCreates} succeeded</span>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Validation Error */}
+          {validationError && (
+            <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md p-4">
+              <div className="flex">
+                <div className="flex-shrink-0">
+                  <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                  </svg>
+                </div>
+                <div className="ml-3">
+                  <h3 className="text-sm font-medium text-red-800 dark:text-red-200">
+                    Field Mapping Validation Failed
+                  </h3>
+                  <div className="mt-2 text-sm text-red-700 dark:text-red-300">
+                    <pre className="whitespace-pre-wrap font-mono text-xs">
+                      {validationError}
+                    </pre>
+                  </div>
+                  <p className="mt-2 text-xs text-red-600 dark:text-red-400">
+                    Please fix the field mappings above and try again.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           <button
             onClick={handleStartMigration}
-            disabled={!canStart}
+            disabled={!canStart || isValidating}
             className={`w-full py-2 px-4 rounded-md font-medium transition-colors ${
-              canStart
+              canStart && !isValidating
                 ? 'bg-blue-600 hover:bg-blue-700 text-white'
                 : 'bg-gray-300 dark:bg-gray-700 text-gray-500 dark:text-gray-400 cursor-not-allowed'
             }`}
           >
-            {isCreating ? 'Starting Migration...' : 'Start Item Migration'}
+            {isValidating ? 'Validating...' : isCreating ? 'Starting Migration...' : 'Start Item Migration'}
           </button>
 
           {validationMessage && (
