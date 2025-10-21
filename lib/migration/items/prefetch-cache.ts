@@ -16,35 +16,87 @@ import { logger as migrationLogger } from '../logging';
 /**
  * Normalize a value for consistent matching
  * Handles strings, numbers, arrays, and objects
+ *
+ * Returns empty string for "empty" values: null, undefined, "", 0, false
+ * Caller should skip empty values (don't match empty to empty)
  */
 function normalizeValue(value: unknown): string {
-  if (value === null || value === undefined) {
+  // UPDATED: Treat 0, false, "", null, undefined as empty
+  if (
+    value === null ||
+    value === undefined ||
+    value === '' ||
+    value === 0 ||
+    value === false
+  ) {
     return '';
   }
 
   // Handle arrays (multi-value fields)
   if (Array.isArray(value)) {
     // Sort array elements for consistent comparison
-    return value
+    const normalized = value
       .map(v => normalizeValue(v))
+      .filter(v => v !== '') // Filter out empty values
       .sort()
       .join('||');
+
+    // If all values were empty, return empty string
+    return normalized || '';
   }
 
   // Handle objects (extract meaningful identifiers)
   if (typeof value === 'object') {
     const obj = value as Record<string, unknown>;
+
     // Try common ID fields
     if ('item_id' in obj) return String(obj.item_id);
     if ('profile_id' in obj) return String(obj.profile_id);
     if ('user_id' in obj) return String(obj.user_id);
+
+    // Handle nested value property (common in Podio fields)
     if ('value' in obj) return normalizeValue(obj.value);
+
     // Fallback to JSON representation
     return JSON.stringify(obj);
   }
 
-  // Handle primitives
-  return String(value).toLowerCase().trim();
+  // UPDATED: Handle numbers - parse and convert to whole number
+  if (typeof value === 'number') {
+    // Round to whole number
+    const wholeNumber = Math.round(value);
+    return String(wholeNumber);
+  }
+
+  // Handle string numbers - parse and normalize
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+
+    // Try to parse as number
+    const parsed = parseFloat(trimmed);
+    if (!isNaN(parsed)) {
+      // It's a numeric string - normalize as whole number
+      const wholeNumber = Math.round(parsed);
+      return String(wholeNumber);
+    }
+
+    // Not a number - normalize as text (lowercase, trim edges only)
+    return trimmed.toLowerCase();
+  }
+
+  // Handle primitives (boolean already handled above)
+  return String(value).trim().toLowerCase();
+}
+
+/**
+ * Exported wrapper for normalizeValue
+ * Use this in tests and logs to access normalization logic
+ *
+ * @param value - Value to normalize
+ * @returns Normalized string for matching
+ */
+export function normalizeForMatch(value: unknown): string {
+  return normalizeValue(value);
 }
 
 /**
@@ -120,15 +172,10 @@ export class PrefetchCache {
     appId: number,
     matchField: string
   ): Promise<void> {
-    console.log('🔍 PRE-FETCH STARTING:', {
-      appId,
-      matchField,
-      timestamp: new Date().toISOString(),
-    });
-
     migrationLogger.info('Starting target item pre-fetch', {
       appId,
       matchField,
+      timestamp: new Date().toISOString(),
     });
 
     const startTime = Date.now();
@@ -171,7 +218,8 @@ export class PrefetchCache {
               normalizedKey,
             });
 
-            if (normalizedKey) {
+            // UPDATED: Skip empty values when building cache
+            if (normalizedKey && normalizedKey !== '') {
               // Store item in cache with metadata
               const now = new Date();
               this.cache.set(normalizedKey, {
@@ -179,6 +227,14 @@ export class PrefetchCache {
                 createdAt: now,
                 lastAccessedAt: now,
                 appId,
+              });
+            } else {
+              migrationLogger.debug('Skipping item with empty match field value', {
+                appId,
+                itemId: item.item_id,
+                matchField,
+                matchValue,
+                reason: 'Empty values are not cached (we don\'t match empties)',
               });
             }
           } else {
@@ -204,15 +260,6 @@ export class PrefetchCache {
       }
 
       const duration = Date.now() - startTime;
-
-      console.log('✅ PRE-FETCH COMPLETE:', {
-        appId,
-        matchField,
-        totalItems: itemCount,
-        uniqueKeys: this.cache.size,
-        durationMs: duration,
-        itemsPerSecond: itemCount > 0 ? Math.round(itemCount / (duration / 1000)) : 0,
-      });
 
       migrationLogger.info('Pre-fetch complete', {
         appId,
@@ -246,6 +293,7 @@ export class PrefetchCache {
 
   /**
    * Check if an item with this match value exists in target app
+   * Returns false if match value is empty (we don't match empties to empties)
    *
    * @param matchValue - Value to search for (will be normalized)
    * @returns True if item exists, false otherwise
@@ -253,8 +301,14 @@ export class PrefetchCache {
   isDuplicate(matchValue: unknown): boolean {
     const normalizedKey = normalizeValue(matchValue);
 
-    if (!normalizedKey) {
+    // UPDATED: Skip empty values - don't match empty to empty
+    if (!normalizedKey || normalizedKey === '') {
       this.misses++;
+      migrationLogger.debug('Skipping empty match value', {
+        matchField: this.matchField,
+        matchValue,
+        reason: 'Empty values are not matched',
+      });
       return false;
     }
 
@@ -298,6 +352,7 @@ export class PrefetchCache {
 
   /**
    * Get the existing item with this match value (if any)
+   * Returns null if match value is empty (we don't match empties to empties)
    *
    * @param matchValue - Value to search for (will be normalized)
    * @returns Existing PodioItem or null
@@ -305,8 +360,14 @@ export class PrefetchCache {
   getExistingItem(matchValue: unknown): PodioItem | null {
     const normalizedKey = normalizeValue(matchValue);
 
-    if (!normalizedKey) {
+    // UPDATED: Skip empty values - don't match empty to empty
+    if (!normalizedKey || normalizedKey === '') {
       this.misses++;
+      migrationLogger.debug('Skipping empty match value', {
+        matchField: this.matchField,
+        matchValue,
+        reason: 'Empty values are not matched',
+      });
       return null;
     }
 
