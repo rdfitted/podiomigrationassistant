@@ -206,10 +206,10 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
       failedItems: finalFailedItems, // Preserve all collected failed items
     });
 
-    // Check if paused
+    // Check if cancelled by user
     if (shouldPause) {
-      await migrationStateStore.updateJobStatus(jobId, 'paused', new Date());
-      logger.info('Item migration job paused', { jobId });
+      await migrationStateStore.updateJobStatus(jobId, 'cancelled', new Date());
+      logger.info('Item migration job cancelled by user', { jobId });
     } else {
       // Update status to completed
       await migrationStateStore.updateJobStatus(jobId, 'completed', new Date());
@@ -222,11 +222,11 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
       });
     }
   } catch (error) {
-    // Check if this was a pause request
+    // Check if this was a cancellation request
     if (error instanceof PauseRequested) {
-      await migrationStateStore.updateJobStatus(jobId, 'paused', new Date());
-      logger.info('Item migration job paused gracefully', { jobId });
-      return; // Don't throw - this is a successful pause
+      await migrationStateStore.updateJobStatus(jobId, 'cancelled', new Date());
+      logger.info('Item migration job cancelled gracefully', { jobId });
+      return; // Don't throw - this is a successful cancellation
     }
 
     logger.error('Item migration job failed', { jobId, error });
