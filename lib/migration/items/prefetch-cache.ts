@@ -49,7 +49,7 @@ function normalizeValue(value: unknown): string {
       .map(v => normalizeValue(v))
       .filter(v => v !== '') // Filter out empty values
       .sort()
-      .join('||');
+      .join(',');
 
     // If all values were empty, return empty string
     return normalized || '';
@@ -71,23 +71,20 @@ function normalizeValue(value: unknown): string {
     return JSON.stringify(obj);
   }
 
-  // UPDATED: Handle numbers - parse and convert to whole number
+  // Numbers: preserve numeric semantics without changing magnitude
   if (typeof value === 'number') {
-    // Round to whole number
-    const wholeNumber = Math.round(value);
-    return String(wholeNumber);
+    return String(value);
   }
 
-  // Handle string numbers - parse and normalize
+  // Handle string numbers - parse and normalize without rounding
   if (typeof value === 'string') {
     const trimmed = value.trim();
 
     // Try to parse as number
     const parsed = parseFloat(trimmed);
     if (!isNaN(parsed)) {
-      // It's a numeric string - normalize as whole number
-      const wholeNumber = Math.round(parsed);
-      return String(wholeNumber);
+      // Keep canonical numeric form (e.g., "678.90" -> "678.9")
+      return String(parsed);
     }
 
     // Not a number - normalize as text (lowercase, trim edges only)
@@ -171,6 +168,15 @@ export class PrefetchCache {
   }
 
   /**
+   * Create a namespaced cache key to avoid collisions across apps/fields
+   * @param normalizedKey - The normalized match value
+   * @returns Namespaced key string
+   */
+  private makeKey(normalizedKey: string): string {
+    return `${this.appId ?? 'na'}|${this.matchField}|${normalizedKey}`;
+  }
+
+  /**
    * Pre-fetch all items from target app and build cache
    *
    * @param client - Podio HTTP client
@@ -232,7 +238,7 @@ export class PrefetchCache {
             if (normalizedKey && normalizedKey !== '') {
               // Store item in cache with metadata
               const now = new Date();
-              this.cache.set(normalizedKey, {
+              this.cache.set(this.makeKey(normalizedKey), {
                 value: item,
                 createdAt: now,
                 lastAccessedAt: now,
@@ -322,7 +328,7 @@ export class PrefetchCache {
       return false;
     }
 
-    const entry = this.cache.get(normalizedKey);
+    const entry = this.cache.get(this.makeKey(normalizedKey));
 
     if (!entry) {
       this.misses++;
@@ -381,7 +387,7 @@ export class PrefetchCache {
       return null;
     }
 
-    const entry = this.cache.get(normalizedKey);
+    const entry = this.cache.get(this.makeKey(normalizedKey));
 
     if (!entry) {
       this.misses++;
@@ -390,7 +396,7 @@ export class PrefetchCache {
 
     // Check TTL expiration
     if (this.isExpired(entry)) {
-      this.cache.delete(normalizedKey);
+      this.cache.delete(this.makeKey(normalizedKey));
       this.misses++;
       migrationLogger.debug('Cache miss - entry expired', {
         matchField: this.matchField,

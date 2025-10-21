@@ -63,6 +63,13 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
     failedCreates: number;
   } | null>(null);
 
+  // Reset dry-run when switching to CREATE mode to avoid sending unsupported flag
+  useEffect(() => {
+    if (mode === 'create' && dryRun) {
+      setDryRun(false);
+    }
+  }, [mode, dryRun]);
+
   const {
     jobId,
     jobStatus,
@@ -204,7 +211,7 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
       concurrency,
       stopOnError: false,
       maxItems,
-      dryRun, // Pass dry-run parameter
+      dryRun: mode !== 'create' ? dryRun : undefined, // Only pass dry-run for UPDATE/UPSERT
     });
   };
 

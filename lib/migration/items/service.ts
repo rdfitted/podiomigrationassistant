@@ -65,7 +65,7 @@ function validateMatchFieldType(
   }
 
   if (!VALID_MATCH_FIELD_TYPES.includes(fieldType)) {
-    logger.warn(`Uncommon match field type: ${fieldType}`, {
+    logger.debug(`Uncommon match field type: ${fieldType}`, {
       fieldLabel,
       fieldRole,
       fieldType,
@@ -89,7 +89,7 @@ export async function createItemMigrationJob(
   });
 
   // LOG: Match field configuration
-  console.log('🔍 Match field configuration:', {
+  logger.debug('Match field configuration', {
     sourceMatchField: request.sourceMatchField,
     targetMatchField: request.targetMatchField,
     duplicateBehavior: request.duplicateBehavior,

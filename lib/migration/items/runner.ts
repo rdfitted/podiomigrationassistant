@@ -45,7 +45,7 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
     const metadata = job.metadata as any;
 
     // LOG: Job metadata extracted
-    console.log('🚀 Runner - Job metadata:', {
+    logger.debug('Runner - Job metadata', {
       jobId,
       sourceAppId: metadata.sourceAppId,
       targetAppId: metadata.targetAppId,
