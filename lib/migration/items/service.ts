@@ -159,6 +159,7 @@ export async function createItemMigrationJob(
       stopOnError: request.stopOnError || false,
       resumeToken: request.resumeToken,
       maxItems: request.maxItems,
+      dryRun: request.dryRun,
     }
   );
 

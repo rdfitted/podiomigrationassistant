@@ -86,6 +86,7 @@ export interface ItemMigrationRequestPayload {
   filters?: ItemMigrationFilters;
   resumeToken?: string;
   maxItems?: number; // Maximum number of items to migrate (for testing)
+  dryRun?: boolean; // Dry-run mode: preview changes without executing (UPDATE mode only)
   /** Resumption configuration for multi-session migrations */
   resumption?: ResumptionConfig;
 }
