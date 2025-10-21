@@ -23,7 +23,7 @@ import { ItemBatchProcessor, BatchProcessorConfig } from './batch-processor';
 import { migrationStateStore, MigrationJob } from '../state-store';
 import { logger as migrationLogger, logMigrationEvent, logDuplicateDetection } from '../logging';
 import { convertFieldMappingToExternalIds } from './service';
-import { PrefetchCache } from './prefetch-cache';
+import { PrefetchCache, normalizeForMatch } from './prefetch-cache';
 import { getAppStructureCache } from './app-structure-cache';
 import { isFieldNotFoundError } from '../../podio/errors';
 
@@ -211,13 +211,24 @@ export class ItemMigrator {
 
   /**
    * Fetch first N items from source app for validation testing
+   *
+   * @param appId - App ID to fetch items from
+   * @param count - Number of items to fetch
+   * @param filters - Optional filters to apply (same as used in migration)
    */
-  private async fetchFirstNItems(appId: number, count: number): Promise<PodioItem[]> {
-    migrationLogger.info('Fetching first N items for validation', { appId, count });
+  private async fetchFirstNItems(
+    appId: number,
+    count: number,
+    filters?: Record<string, unknown>
+  ): Promise<PodioItem[]> {
+    migrationLogger.info('Fetching first N items for validation', { appId, count, filters });
 
     const items: PodioItem[] = [];
 
-    for await (const batch of streamItems(this.client, appId, { batchSize: count })) {
+    for await (const batch of streamItems(this.client, appId, {
+      batchSize: count,
+      filters
+    })) {
       items.push(...batch.slice(0, count - items.length));
       if (items.length >= count) break;
     }
@@ -226,6 +237,7 @@ export class ItemMigrator {
       appId,
       requested: count,
       fetched: items.length,
+      filtersApplied: !!filters,
     });
 
     return items;
@@ -245,10 +257,18 @@ export class ItemMigrator {
     failedCreates: number;
     testItemIds: number[];
   }> {
-    migrationLogger.info('Starting field mapping validation');
+    migrationLogger.info('Starting field mapping validation', {
+      sourceAppId: config.sourceAppId,
+      targetAppId: config.targetAppId,
+      hasFilters: !!config.filters,
+    });
 
-    // Step 1: Fetch first 3 items from source app
-    const testSourceItems = await this.fetchFirstNItems(config.sourceAppId, 3);
+    // Step 1: Fetch first 3 items from source app (with same filters as migration)
+    const testSourceItems = await this.fetchFirstNItems(
+      config.sourceAppId,
+      3,
+      config.filters
+    );
 
     if (testSourceItems.length === 0) {
       return {
@@ -750,7 +770,7 @@ export class ItemMigrator {
                         sourceItemId: sourceItem.item_id,
                         matchField: targetMatchField,
                         matchValue,
-                        normalizedValue: String(matchValue),
+                        normalizedValue: normalizeForMatch(matchValue),
                         fromCache: true,
                       }
                     );

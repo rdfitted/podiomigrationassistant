@@ -89,6 +89,17 @@ function normalizeValue(value: unknown): string {
 }
 
 /**
+ * Exported wrapper for normalizeValue
+ * Use this in tests and logs to access normalization logic
+ *
+ * @param value - Value to normalize
+ * @returns Normalized string for matching
+ */
+export function normalizeForMatch(value: unknown): string {
+  return normalizeValue(value);
+}
+
+/**
  * Cache entry with metadata for TTL tracking
  */
 interface CacheEntry<T> {
@@ -161,15 +172,10 @@ export class PrefetchCache {
     appId: number,
     matchField: string
   ): Promise<void> {
-    console.log('🔍 PRE-FETCH STARTING:', {
-      appId,
-      matchField,
-      timestamp: new Date().toISOString(),
-    });
-
     migrationLogger.info('Starting target item pre-fetch', {
       appId,
       matchField,
+      timestamp: new Date().toISOString(),
     });
 
     const startTime = Date.now();
@@ -254,15 +260,6 @@ export class PrefetchCache {
       }
 
       const duration = Date.now() - startTime;
-
-      console.log('✅ PRE-FETCH COMPLETE:', {
-        appId,
-        matchField,
-        totalItems: itemCount,
-        uniqueKeys: this.cache.size,
-        durationMs: duration,
-        itemsPerSecond: itemCount > 0 ? Math.round(itemCount / (duration / 1000)) : 0,
-      });
 
       migrationLogger.info('Pre-fetch complete', {
         appId,
