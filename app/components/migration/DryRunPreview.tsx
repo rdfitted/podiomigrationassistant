@@ -20,7 +20,7 @@ export interface UpdatePreview {
 
 export interface CreatePreview {
   sourceItemId: number;
-  matchValue?: unknown;
+  matchValue?: unknown | null;
   fields: Array<{
     fieldExternalId: string;
     fieldLabel?: string;
@@ -417,7 +417,11 @@ export function DryRunPreview({ preview, onExecute, onReset }: DryRunPreviewProp
                     <span className="text-gray-600 dark:text-gray-400 text-xl">⏭️</span>
                     <div>
                       <div className="text-sm font-medium text-gray-900 dark:text-white">
-                        Source Item #{item.sourceItemId} → Target Item #{item.targetItemId}
+                        {typeof item.targetItemId === 'number' ? (
+                          <>Source Item #{item.sourceItemId} → Target Item #{item.targetItemId}</>
+                        ) : (
+                          <>Source Item #{item.sourceItemId}</>
+                        )}
                       </div>
                       <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">
                         Match Value: {formatValue(item.matchValue)}

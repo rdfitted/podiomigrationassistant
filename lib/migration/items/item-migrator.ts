@@ -69,7 +69,7 @@ export interface MigrationConfig {
   maxItems?: number;
   /** Specific source item IDs to retry (for retry operations) */
   retryItemIds?: number[];
-  /** Dry-run mode: preview changes without executing (UPDATE mode only) */
+  /** Dry-run mode: preview changes without executing (CREATE, UPDATE, UPSERT) */
   dryRun?: boolean;
   /** Progress callback */
   onProgress?: (progress: { total: number; processed: number; successful: number; failed: number }) => void | Promise<void>;
@@ -543,7 +543,6 @@ export class ItemMigrator {
   private async generateCreatePreview(
     sourceItem: PodioItem,
     mappedFields: Record<string, unknown>,
-    externalIdFieldMapping: Record<string, string>,
     matchValue: unknown | null,
     targetAppId: number
   ): Promise<CreatePreview> {
@@ -598,8 +597,9 @@ export class ItemMigrator {
       });
     }
 
-    // ONLY validate for CREATE mode
-    if (config.mode === 'create') {
+    // ONLY validate for CREATE mode when not in dry-run
+    // (validation creates/deletes test items, which violates dry-run contract)
+    if (config.mode === 'create' && !config.dryRun) {
       migrationLogger.info('Validating field mapping before migration');
 
       const validationResult = await this.validateFieldMapping(config);
@@ -711,7 +711,7 @@ export class ItemMigrator {
       const duplicateBehavior = config.duplicateBehavior || 'skip';
 
       // LOG: Configuration received
-      console.log('⚙️  Migrator config received:', {
+      migrationLogger.debug('Migrator config received', {
         sourceAppId: config.sourceAppId,
         targetAppId: config.targetAppId,
         mode: config.mode,
@@ -894,17 +894,24 @@ export class ItemMigrator {
             const mappedFields = mapItemFields(sourceItem, externalIdFieldMapping);
 
             // Handle different migration modes
-            if (config.mode === 'create') {
+            // UPSERT mode is treated like CREATE with effective duplicate behavior = 'update'
+            if (config.mode === 'create' || config.mode === 'upsert') {
+              // Determine effective duplicate behavior (UPSERT always updates duplicates)
+              const effectiveDuplicateBehavior: DuplicateBehavior =
+                config.mode === 'upsert' ? 'update' : (duplicateBehavior || 'skip');
+
               // LOG: Check duplicate condition
-              console.log('🔎 Checking duplicate condition:', {
+              migrationLogger.debug('Checking duplicate condition', {
                 sourceItemId: sourceItem.item_id,
                 mode: config.mode,
                 sourceMatchField,
                 targetMatchField,
+                duplicateBehavior,
+                effectiveDuplicateBehavior,
                 willCheck: !!(sourceMatchField && targetMatchField),
               });
 
-              // CREATE mode: optionally check for duplicates
+              // CREATE/UPSERT mode: optionally check for duplicates
               if (sourceMatchField && targetMatchField) {
                 // Extract match field value from source item
                 const sourceField = sourceItem.fields.find(
@@ -929,6 +936,7 @@ export class ItemMigrator {
                     matchValueType: typeof matchValue,
                     isArray: Array.isArray(matchValue),
                     duplicateBehavior,
+                    effectiveDuplicateBehavior,
                   });
 
                   // Use pre-fetch cache for instant O(1) duplicate lookup (NO API call)
@@ -961,7 +969,7 @@ export class ItemMigrator {
                       }
                     );
 
-                    if (duplicateBehavior === 'skip') {
+                    if (effectiveDuplicateBehavior === 'skip') {
                       skippedCount++;
                       logDuplicateDetection(
                         migrationJob.id,
@@ -987,7 +995,7 @@ export class ItemMigrator {
                         });
                       }
                       continue;
-                    } else if (duplicateBehavior === 'error') {
+                    } else if (effectiveDuplicateBehavior === 'error') {
                       // Dry-run mode: track as would-fail instead of throwing
                       if (config.dryRun) {
                         dryRunFailedMatches.push({
@@ -1001,7 +1009,7 @@ export class ItemMigrator {
                           `Duplicate item found for ${sourceMatchField}=${matchValue} (source: ${sourceItem.item_id}, target: ${existingItem.item_id})`
                         );
                       }
-                    } else if (duplicateBehavior === 'update') {
+                    } else if (effectiveDuplicateBehavior === 'update') {
                       // Update instead of create
                       updatedDuplicatesCount++;
                       logDuplicateDetection(
@@ -1230,8 +1238,8 @@ export class ItemMigrator {
       // Process updates first (if any)
       let updateResult;
       if (itemsToUpdate.length > 0) {
-        // DRY-RUN MODE: Generate preview instead of executing updates
-        if (config.dryRun && (config.mode === 'update' || config.mode === 'upsert')) {
+        // DRY-RUN MODE: Generate preview instead of executing updates (applies to all modes)
+        if (config.dryRun) {
           migrationLogger.info('Dry-run mode: Generating update preview', {
             count: itemsToUpdate.length,
           });
@@ -1340,7 +1348,6 @@ export class ItemMigrator {
             const preview = await this.generateCreatePreview(
               createInfo.sourceItem,
               createInfo.fields,
-              externalIdFieldMapping,
               createInfo.matchValue,
               config.targetAppId
             );
