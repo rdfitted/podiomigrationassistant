@@ -158,29 +158,44 @@ export interface UpdatePreview {
 /**
  * Dry-run preview result
  */
+export interface CreatePreview {
+  sourceItemId: number;
+  matchValue: unknown | null;
+  fields: Array<{
+    fieldExternalId: string;
+    fieldLabel?: string;
+    value: unknown;
+  }>;
+  fieldCount: number;
+}
+
 export interface DryRunPreview {
-  /** Items that would be successfully updated */
-  wouldUpdate: UpdatePreview[];
-  /** Items that would fail (no match found) */
+  mode: 'create' | 'update' | 'upsert';
+  /** Items that would be created (CREATE mode) */
+  wouldCreate?: CreatePreview[];
+  /** Items that would be successfully updated (UPDATE/UPSERT modes) */
+  wouldUpdate?: UpdatePreview[];
+  /** Items that would fail (no match found or duplicate error) */
   wouldFail: Array<{
     sourceItemId: number;
-    matchValue: unknown;
+    matchValue?: unknown;
     reason: string;
   }>;
-  /** Items that would be skipped (no changes detected) */
+  /** Items that would be skipped (no changes detected or duplicate skip) */
   wouldSkip: Array<{
     sourceItemId: number;
-    targetItemId: number;
-    matchValue: unknown;
+    targetItemId?: number | null;
+    matchValue?: unknown;
     reason: string;
   }>;
   /** Summary statistics */
   summary: {
     totalSourceItems: number;
-    wouldUpdateCount: number;
+    wouldCreateCount?: number;
+    wouldUpdateCount?: number;
     wouldFailCount: number;
     wouldSkipCount: number;
-    totalFieldChanges: number;
+    totalFieldChanges?: number;
   };
 }
 
@@ -523,6 +538,47 @@ export class ItemMigrator {
   }
 
   /**
+   * Generate a preview for a CREATE operation
+   */
+  private async generateCreatePreview(
+    sourceItem: PodioItem,
+    mappedFields: Record<string, unknown>,
+    externalIdFieldMapping: Record<string, string>,
+    matchValue: unknown | null,
+    targetAppId: number
+  ): Promise<CreatePreview> {
+    const fields: Array<{
+      fieldExternalId: string;
+      fieldLabel?: string;
+      value: unknown;
+    }> = [];
+
+    // Get target app structure for field labels
+    const appStructureCache = getAppStructureCache();
+    const targetApp = await appStructureCache.getAppStructure(targetAppId);
+
+    // For each mapped field, add to preview
+    for (const [targetExternalId, value] of Object.entries(mappedFields)) {
+      // Find field label
+      const targetFieldDef = targetApp.fields?.find(f => f.external_id === targetExternalId);
+      const fieldLabel = targetFieldDef?.label || targetExternalId;
+
+      fields.push({
+        fieldExternalId: targetExternalId,
+        fieldLabel,
+        value,
+      });
+    }
+
+    return {
+      sourceItemId: sourceItem.item_id,
+      matchValue,
+      fields,
+      fieldCount: fields.length,
+    };
+  }
+
+  /**
    * Execute a migration
    */
   async executeMigration(config: MigrationConfig): Promise<MigrationResult> {
@@ -535,9 +591,11 @@ export class ItemMigrator {
       dryRun: config.dryRun,
     });
 
-    // Validate: dry-run is only supported for UPDATE and UPSERT modes
-    if (config.dryRun && config.mode !== 'update' && config.mode !== 'upsert') {
-      throw new Error(`Dry-run mode is only supported for UPDATE and UPSERT operations. Current mode: ${config.mode}`);
+    // Dry-run mode is now supported for all operations (CREATE, UPDATE, UPSERT)
+    if (config.dryRun) {
+      migrationLogger.info('Dry-run mode enabled - no items will be created or updated', {
+        mode: config.mode,
+      });
     }
 
     // ONLY validate for CREATE mode
@@ -676,8 +734,19 @@ export class ItemMigrator {
         matchValue: unknown;
         fields: Record<string, unknown>;
       }> = [];
+      const dryRunCreateInfo: Array<{
+        sourceItem: PodioItem;
+        matchValue: unknown | null;
+        fields: Record<string, unknown>;
+      }> = [];
       const dryRunFailedMatches: Array<{
         sourceItemId: number;
+        matchValue: unknown;
+        reason: string;
+      }> = [];
+      const dryRunSkippedItems: Array<{
+        sourceItemId: number;
+        targetItemId: number | null;
         matchValue: unknown;
         reason: string;
       }> = [];
@@ -907,11 +976,31 @@ export class ItemMigrator {
                           fromCache: true,
                         }
                       );
+
+                      // Dry-run mode: capture skipped item info
+                      if (config.dryRun) {
+                        dryRunSkippedItems.push({
+                          sourceItemId: sourceItem.item_id,
+                          targetItemId: existingItem.item_id,
+                          matchValue,
+                          reason: `Duplicate found for ${sourceMatchField}=${matchValue} - would be skipped`,
+                        });
+                      }
                       continue;
                     } else if (duplicateBehavior === 'error') {
-                      throw new Error(
-                        `Duplicate item found for ${sourceMatchField}=${matchValue} (source: ${sourceItem.item_id}, target: ${existingItem.item_id})`
-                      );
+                      // Dry-run mode: track as would-fail instead of throwing
+                      if (config.dryRun) {
+                        dryRunFailedMatches.push({
+                          sourceItemId: sourceItem.item_id,
+                          matchValue,
+                          reason: `Duplicate found for ${sourceMatchField}=${matchValue} - would fail with error`,
+                        });
+                        continue;
+                      } else {
+                        throw new Error(
+                          `Duplicate item found for ${sourceMatchField}=${matchValue} (source: ${sourceItem.item_id}, target: ${existingItem.item_id})`
+                        );
+                      }
                     } else if (duplicateBehavior === 'update') {
                       // Update instead of create
                       updatedDuplicatesCount++;
@@ -933,6 +1022,16 @@ export class ItemMigrator {
                         fields: mappedFields,
                         sourceItemId: sourceItem.item_id, // Track source item ID for error reporting
                       });
+
+                      // Dry-run mode: capture duplicate-update info
+                      if (config.dryRun) {
+                        dryRunUpdateInfo.push({
+                          sourceItem,
+                          targetItem: existingItem,
+                          matchValue,
+                          fields: mappedFields,
+                        });
+                      }
                       continue;
                     }
                   } else {
@@ -969,6 +1068,17 @@ export class ItemMigrator {
                     sourceMatchField,
                     availableFields: sourceItem.fields.map(f => f.external_id),
                   });
+
+                  // Dry-run mode: capture skipped item info
+                  if (config.dryRun) {
+                    dryRunSkippedItems.push({
+                      sourceItemId: sourceItem.item_id,
+                      targetItemId: null,
+                      matchValue: null,
+                      reason: `Source match field '${sourceMatchField}' not found in item - would be skipped`,
+                    });
+                  }
+
                   skippedCount++;
                   continue;
                 }
@@ -979,6 +1089,26 @@ export class ItemMigrator {
                 fields: mappedFields,
                 external_id: `migrated-${sourceItem.item_id}`,
               });
+
+              // Dry-run mode: capture create info
+              if (config.dryRun) {
+                // Extract match value if match fields are set
+                let capturedMatchValue: unknown | null = null;
+                if (sourceMatchField) {
+                  const sourceField = sourceItem.fields.find(
+                    (f) => f.external_id === sourceMatchField
+                  );
+                  if (sourceField) {
+                    capturedMatchValue = extractFieldValue(sourceField);
+                  }
+                }
+
+                dryRunCreateInfo.push({
+                  sourceItem,
+                  matchValue: capturedMatchValue,
+                  fields: mappedFields,
+                });
+              }
             } else if (config.mode === 'update') {
               // UPDATE mode: find item by match field and update
               if (!sourceMatchField || !targetMatchField) {
@@ -1134,6 +1264,7 @@ export class ItemMigrator {
 
           // Build dry-run preview result
           const dryRunPreview: DryRunPreview = {
+            mode: config.mode,
             wouldUpdate: updatePreviews,
             wouldFail: dryRunFailedMatches,
             wouldSkip: skippedPreviews,
@@ -1196,34 +1327,82 @@ export class ItemMigrator {
       // Process creates (if any)
       let createResult;
       if (itemsToCreate.length > 0) {
-        migrationLogger.info('Processing creates', {
-          count: itemsToCreate.length,
-        });
+        // DRY-RUN MODE: Generate preview instead of executing creates
+        if (config.dryRun && config.mode === 'create') {
+          migrationLogger.info('Dry-run mode: Generating create preview', {
+            count: itemsToCreate.length,
+          });
 
-        try {
-          createResult = await processor.processCreate(itemsToCreate);
-          // Note: result.successful/failed/processed already updated by progress event handler
-        } catch (error) {
-          // Check if error is due to stale cache (deleted fields)
-          if (isFieldNotFoundError(error)) {
-            migrationLogger.warn('Field not found error detected - clearing caches and retrying', {
-              error: error instanceof Error ? error.message : String(error),
-            });
+          // Generate preview for each create
+          const createPreviews: CreatePreview[] = [];
 
-            // Clear both caches
-            if (prefetchCache) {
-              prefetchCache.clear();
-            }
-            const appStructureCache = getAppStructureCache();
-            appStructureCache.clearAppStructure(config.sourceAppId);
-            appStructureCache.clearAppStructure(config.targetAppId);
+          for (const createInfo of dryRunCreateInfo) {
+            const preview = await this.generateCreatePreview(
+              createInfo.sourceItem,
+              createInfo.fields,
+              externalIdFieldMapping,
+              createInfo.matchValue,
+              config.targetAppId
+            );
+            createPreviews.push(preview);
+          }
 
-            // Retry once with fresh cache
-            migrationLogger.info('Retrying create operation after cache clear');
+          // Build dry-run preview result for CREATE mode
+          const dryRunPreview: DryRunPreview = {
+            mode: config.mode,
+            wouldCreate: createPreviews,
+            wouldFail: dryRunFailedMatches,
+            wouldSkip: dryRunSkippedItems,
+            summary: {
+              totalSourceItems: dryRunCreateInfo.length + dryRunFailedMatches.length + dryRunSkippedItems.length,
+              wouldCreateCount: createPreviews.length,
+              wouldFailCount: dryRunFailedMatches.length,
+              wouldSkipCount: dryRunSkippedItems.length,
+            },
+          };
+
+          result.dryRunPreview = dryRunPreview;
+
+          // In dry-run mode, mark everything as successful (no actual execution)
+          result.successful = createPreviews.length;
+          result.processed = dryRunCreateInfo.length + dryRunFailedMatches.length + dryRunSkippedItems.length;
+
+          migrationLogger.info('Dry-run preview generated', {
+            wouldCreate: createPreviews.length,
+            wouldFail: dryRunFailedMatches.length,
+            wouldSkip: dryRunSkippedItems.length,
+          });
+        } else {
+          // NORMAL MODE: Execute creates
+          migrationLogger.info('Processing creates', {
+            count: itemsToCreate.length,
+          });
+
+          try {
             createResult = await processor.processCreate(itemsToCreate);
-          } else {
-            // Re-throw if not a field error
-            throw error;
+            // Note: result.successful/failed/processed already updated by progress event handler
+          } catch (error) {
+            // Check if error is due to stale cache (deleted fields)
+            if (isFieldNotFoundError(error)) {
+              migrationLogger.warn('Field not found error detected - clearing caches and retrying', {
+                error: error instanceof Error ? error.message : String(error),
+              });
+
+              // Clear both caches
+              if (prefetchCache) {
+                prefetchCache.clear();
+              }
+              const appStructureCache = getAppStructureCache();
+              appStructureCache.clearAppStructure(config.sourceAppId);
+              appStructureCache.clearAppStructure(config.targetAppId);
+
+              // Retry once with fresh cache
+              migrationLogger.info('Retrying create operation after cache clear');
+              createResult = await processor.processCreate(itemsToCreate);
+            } else {
+              // Re-throw if not a field error
+              throw error;
+            }
           }
         }
       }
