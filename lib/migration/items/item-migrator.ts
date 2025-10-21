@@ -1366,7 +1366,7 @@ export class ItemMigrator {
               wouldFail: dryRunFailedMatches,
               wouldSkip: [...(existingPreview.wouldSkip || []), ...dryRunSkippedItems],
               summary: {
-                totalSourceItems: dryRunCreateInfo.length + (existingPreview.summary.totalSourceItems || 0),
+                totalSourceItems: dryRunCreateInfo.length + dryRunSkippedItems.length + (existingPreview.summary.totalSourceItems || 0),
                 wouldCreateCount: createPreviews.length,
                 wouldUpdateCount: existingPreview.summary.wouldUpdateCount,
                 wouldFailCount: dryRunFailedMatches.length,
