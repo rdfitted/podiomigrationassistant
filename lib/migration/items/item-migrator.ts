@@ -1335,8 +1335,8 @@ export class ItemMigrator {
       // Process creates (if any)
       let createResult;
       if (itemsToCreate.length > 0) {
-        // DRY-RUN MODE: Generate preview instead of executing creates
-        if (config.dryRun && config.mode === 'create') {
+        // DRY-RUN MODE: Generate preview instead of executing creates (applies to all modes)
+        if (config.dryRun) {
           migrationLogger.info('Dry-run mode: Generating create preview', {
             count: itemsToCreate.length,
           });
