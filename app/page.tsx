@@ -6,7 +6,8 @@
 
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import type { CSSProperties } from 'react';
 import { useChatSession } from './hooks/useChatSession';
 import { ConversationView } from './components/chat/ConversationView';
 import { ChatControls } from './components/chat/ChatControls';
@@ -14,9 +15,48 @@ import { MigrationSelectionPanel } from './components/migration/MigrationSelecti
 import type { ChatMessage } from '@/lib/chat/types';
 import type { MigrationSelectionState } from './hooks/useMigrationSelection';
 
+const getPanelWidth = (viewportWidth: number) => {
+  if (viewportWidth <= 0) {
+    return 0;
+  }
+
+  if (viewportWidth <= 640) {
+    return viewportWidth;
+  }
+
+  if (viewportWidth <= 1024) {
+    return Math.min(Math.max(viewportWidth * 0.45, 320), 420);
+  }
+
+  return Math.min(Math.max(viewportWidth * 0.35, 360), 520);
+};
+
 export default function Chat() {
   const [migrationContext, setMigrationContext] = useState<MigrationSelectionState | null>(null);
   const [isPanelOpen, setIsPanelOpen] = useState(true);
+  const [viewportWidth, setViewportWidth] = useState(0);
+
+  useEffect(() => {
+    const updateViewportWidth = () => {
+      setViewportWidth(window.innerWidth);
+    };
+
+    updateViewportWidth();
+    window.addEventListener('resize', updateViewportWidth);
+
+    return () => {
+      window.removeEventListener('resize', updateViewportWidth);
+    };
+  }, []);
+
+  const currentViewportWidth = viewportWidth || (typeof window !== 'undefined' ? window.innerWidth : 0);
+  const panelWidth = getPanelWidth(currentViewportWidth);
+  const isFullWidthPanel = currentViewportWidth <= 640;
+  const toggleButtonStyle: CSSProperties = isPanelOpen
+    ? isFullWidthPanel
+      ? { left: 0, right: 'auto' }
+      : { right: panelWidth, left: 'auto' }
+    : { right: 0, left: 'auto' };
 
   const {
     messages,
@@ -75,7 +115,12 @@ export default function Chat() {
   return (
     <div className="flex h-screen bg-gray-50 dark:bg-gray-900 relative">
       {/* Main chat column */}
-      <div className={`flex flex-1 flex-col overflow-hidden transition-all duration-300 ${isPanelOpen ? 'ml-[5%]' : ''}`}>
+      <div
+        className="flex flex-1 flex-col overflow-hidden transition-all duration-300"
+        style={{
+          marginRight: isPanelOpen && !isFullWidthPanel ? panelWidth : 0,
+        }}
+      >
         {/* Header */}
         <div className="border-b border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
           <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
@@ -131,18 +176,22 @@ export default function Chat() {
       </div>
 
       {/* Migration selection panel (right side) - Collapsible Full Width Overlay */}
-      <div className={`fixed right-0 top-0 h-full w-full transition-transform duration-300 ease-in-out z-40 ${
-        isPanelOpen ? 'translate-x-0' : 'translate-x-full'
-      }`}>
+      <div
+        className={`fixed right-0 top-0 h-full transition-transform duration-300 ease-in-out z-40 ${
+          isPanelOpen ? 'translate-x-0' : 'translate-x-full'
+        }`}
+        style={{
+          width: isFullWidthPanel ? '100%' : `${panelWidth}px`,
+        }}
+      >
         <MigrationSelectionPanel onSelectionChange={setMigrationContext} />
       </div>
 
       {/* Toggle Button */}
       <button
         onClick={() => setIsPanelOpen(!isPanelOpen)}
-        className={`fixed top-1/2 -translate-y-1/2 z-50 bg-blue-600 hover:bg-blue-700 text-white p-3 rounded-l-lg shadow-lg transition-all duration-300 ${
-          isPanelOpen ? 'left-0' : 'right-0'
-        }`}
+        className="fixed top-1/2 -translate-y-1/2 z-50 bg-blue-600 hover:bg-blue-700 text-white p-3 rounded-l-lg shadow-lg transition-all duration-300"
+        style={toggleButtonStyle}
         title={isPanelOpen ? 'Close panel' : 'Open panel'}
       >
         <svg
