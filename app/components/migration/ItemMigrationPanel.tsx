@@ -568,8 +568,8 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
             </p>
           </div>
 
-          {/* Dry-Run Mode - Only show for UPDATE mode */}
-          {mode === 'update' && (
+          {/* Dry-Run Mode - Show for UPDATE and UPSERT modes */}
+          {(mode === 'update' || mode === 'upsert') && (
             <div className="bg-blue-50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-800 rounded-md p-4">
               <label className="flex items-start cursor-pointer">
                 <input
@@ -584,7 +584,7 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
                     🔍 Dry-Run Mode (Preview Changes)
                   </span>
                   <p className="mt-1 text-xs text-blue-700 dark:text-blue-300">
-                    Preview exactly what would change without executing any updates.
+                    Preview exactly what would {mode === 'update' ? 'be updated' : 'be updated or created'} without executing any changes.
                     See field-by-field changes, identify missing matches, and skip items with no changes.
                   </p>
                 </div>

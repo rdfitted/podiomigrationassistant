@@ -535,9 +535,9 @@ export class ItemMigrator {
       dryRun: config.dryRun,
     });
 
-    // Validate: dry-run is only supported for UPDATE mode
-    if (config.dryRun && config.mode !== 'update') {
-      throw new Error(`Dry-run mode is only supported for UPDATE operations. Current mode: ${config.mode}`);
+    // Validate: dry-run is only supported for UPDATE and UPSERT modes
+    if (config.dryRun && config.mode !== 'update' && config.mode !== 'upsert') {
+      throw new Error(`Dry-run mode is only supported for UPDATE and UPSERT operations. Current mode: ${config.mode}`);
     }
 
     // ONLY validate for CREATE mode
@@ -1101,7 +1101,7 @@ export class ItemMigrator {
       let updateResult;
       if (itemsToUpdate.length > 0) {
         // DRY-RUN MODE: Generate preview instead of executing updates
-        if (config.dryRun && config.mode === 'update') {
+        if (config.dryRun && (config.mode === 'update' || config.mode === 'upsert')) {
           migrationLogger.info('Dry-run mode: Generating update preview', {
             count: itemsToUpdate.length,
           });
