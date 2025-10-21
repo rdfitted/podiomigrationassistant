@@ -401,6 +401,16 @@ export class ItemMigrator {
         // NOTE: For retry mode, we skip duplicate detection since we're retrying items that failed
         // for other reasons (rate limits, transient errors, etc.), not because they were duplicates
         for (const batch of sourceItemBatches!) {
+          // Check for pause request before processing each batch
+          if (config.onProgress) {
+            await config.onProgress({
+              total: config.retryItemIds!.length,
+              processed: itemsToCreate.length,
+              successful: 0,
+              failed: 0,
+            });
+          }
+
           // Map items using field mapping
           for (const sourceItem of batch) {
             const mappedFields = mapItemFields(sourceItem, externalIdFieldMapping);
@@ -425,6 +435,16 @@ export class ItemMigrator {
             filters: config.filters,
           }
         )) {
+          // Check for pause request before processing each batch
+          if (config.onProgress) {
+            await config.onProgress({
+              total: itemsToCreate.length + itemsToUpdate.length + batch.length,
+              processed: itemsToCreate.length + itemsToUpdate.length,
+              successful: 0,
+              failed: 0,
+            });
+          }
+
           // Map items using field mapping
           for (const sourceItem of batch) {
             // Check if we've reached the max items limit

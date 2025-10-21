@@ -286,7 +286,7 @@ export async function pauseMigration(migrationId: string): Promise<void> {
   logger.info('Waiting for migration to pause', { migrationId });
 
   // Wait for migration to reach 'paused' state (with timeout)
-  const timeout = 60000; // 60 seconds
+  const timeout = 300000; // 5 minutes (increased from 60 seconds to handle long-running streaming phases)
   const startTime = Date.now();
 
   while (Date.now() - startTime < timeout) {
@@ -296,14 +296,14 @@ export async function pauseMigration(migrationId: string): Promise<void> {
       throw new Error(`Migration not found: ${migrationId}`);
     }
 
-    if (job.status === 'paused') {
-      logger.info('Migration paused successfully', { migrationId });
+    if (job.status === 'paused' || job.status === 'cancelled') {
+      logger.info('Migration stopped successfully', { migrationId, status: job.status });
       clearPauseRequest(migrationId);
       return;
     }
 
     if (job.status === 'completed' || job.status === 'failed') {
-      logger.warn('Migration completed before pause', { migrationId, status: job.status });
+      logger.warn('Migration completed before stop', { migrationId, status: job.status });
       clearPauseRequest(migrationId);
       return;
     }
@@ -313,5 +313,5 @@ export async function pauseMigration(migrationId: string): Promise<void> {
   }
 
   // Timeout reached
-  throw new Error(`Timeout waiting for migration ${migrationId} to pause`);
+  throw new Error(`Timeout waiting for migration ${migrationId} to stop`);
 }
