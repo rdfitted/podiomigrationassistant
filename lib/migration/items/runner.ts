@@ -45,7 +45,7 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
     const metadata = job.metadata as any;
 
     // LOG: Job metadata extracted
-    console.log('🚀 Runner - Job metadata:', {
+    logger.debug('Runner - Job metadata', {
       jobId,
       sourceAppId: metadata.sourceAppId,
       targetAppId: metadata.targetAppId,
@@ -124,6 +124,7 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
       filters: metadata.filters,
       resumeToken: metadata.resumeToken,
       maxItems: metadata.maxItems,
+      dryRun: metadata.dryRun, // Pass dry-run mode
       retryItemIds: retryItemIds.length > 0 ? retryItemIds : undefined,
       onProgress: async (progress) => {
         // Check for pause request
@@ -206,6 +207,25 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
       failedItems: finalFailedItems, // Preserve all collected failed items
     });
 
+    // Store dry-run preview in metadata if available
+    if (result.dryRunPreview) {
+      logger.info('Storing dry-run preview in job metadata', {
+        jobId,
+        wouldUpdate: result.dryRunPreview.summary.wouldUpdateCount,
+        wouldFail: result.dryRunPreview.summary.wouldFailCount,
+        wouldSkip: result.dryRunPreview.summary.wouldSkipCount,
+      });
+
+      const currentJob = await migrationStateStore.getMigrationJob(jobId);
+      if (currentJob) {
+        currentJob.metadata = {
+          ...currentJob.metadata,
+          dryRunPreview: result.dryRunPreview,
+        };
+        await migrationStateStore.saveMigrationJob(currentJob);
+      }
+    }
+
     // Check if cancelled by user
     if (shouldPause) {
       await migrationStateStore.updateJobStatus(jobId, 'cancelled', new Date());
@@ -219,6 +239,7 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
         processed: result.processed,
         successful: result.successful,
         failed: result.failed,
+        dryRun: !!result.dryRunPreview,
       });
     }
   } catch (error) {

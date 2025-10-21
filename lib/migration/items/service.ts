@@ -9,6 +9,71 @@ import { getAppStructureDetailed } from '../../podio/migration';
 import { logger } from '../logging';
 
 /**
+ * Field types that are valid for matching
+ * These produce simple, comparable values (text, numbers, booleans)
+ */
+const VALID_MATCH_FIELD_TYPES = [
+  'text',        // Text fields - direct string comparison
+  'number',      // Number fields - numeric values
+  'calculation', // Calculated fields - extracted computed value
+  'email',       // Email fields - email addresses
+  'phone',       // Phone fields - phone numbers
+  'tel',         // Telephone fields - phone numbers (legacy)
+  'duration',    // Duration fields - time values
+  'money',       // Money fields - monetary values (just the number)
+  'location',    // Location fields - address text
+  'question',    // Question fields - yes/no boolean
+];
+
+/**
+ * Field types that should NOT be used for matching
+ * These produce IDs or complex objects that aren't portable
+ */
+const INVALID_MATCH_FIELD_TYPES = [
+  'app',         // App relationship fields - item IDs (meaningless across apps)
+  'category',    // Category fields - internal category IDs (not portable)
+  'contact',     // Contact fields - profile/user IDs (not portable)
+  'date',        // Date fields - complex objects {start, end}
+  'image',       // Image fields - file IDs
+  'file',        // File fields - file IDs
+  'embed',       // Embed fields - URLs/embeds
+  'created_on',  // System field - creation timestamp
+  'created_by',  // System field - creator
+  'created_via', // System field - creation method
+];
+
+/**
+ * Validate that a field type is suitable for matching
+ *
+ * @param fieldType - Field type to validate
+ * @param fieldLabel - Field label for error messages
+ * @param fieldRole - 'source' or 'target' for error messages
+ * @throws Error if field type is invalid for matching
+ */
+function validateMatchFieldType(
+  fieldType: string,
+  fieldLabel: string,
+  fieldRole: 'source' | 'target'
+): void {
+  if (INVALID_MATCH_FIELD_TYPES.includes(fieldType)) {
+    throw new Error(
+      `Invalid ${fieldRole} match field type: "${fieldLabel}" is a ${fieldType} field. ` +
+      `${fieldType.charAt(0).toUpperCase() + fieldType.slice(1)} fields cannot be used for matching because ` +
+      `they contain IDs or complex objects that aren't portable across apps. ` +
+      `Valid match field types: ${VALID_MATCH_FIELD_TYPES.join(', ')}`
+    );
+  }
+
+  if (!VALID_MATCH_FIELD_TYPES.includes(fieldType)) {
+    logger.debug(`Uncommon match field type: ${fieldType}`, {
+      fieldLabel,
+      fieldRole,
+      fieldType,
+    });
+  }
+}
+
+/**
  * Create a new item migration job
  */
 export async function createItemMigrationJob(
@@ -24,7 +89,7 @@ export async function createItemMigrationJob(
   });
 
   // LOG: Match field configuration
-  console.log('🔍 Match field configuration:', {
+  logger.debug('Match field configuration', {
     sourceMatchField: request.sourceMatchField,
     targetMatchField: request.targetMatchField,
     duplicateBehavior: request.duplicateBehavior,
@@ -32,6 +97,41 @@ export async function createItemMigrationJob(
     hasTargetMatch: !!request.targetMatchField,
     hasBoth: !!(request.sourceMatchField && request.targetMatchField),
   });
+
+  // Validate match field types if provided
+  if (request.sourceMatchField && request.targetMatchField) {
+    logger.info('Validating match field types', {
+      sourceMatchField: request.sourceMatchField,
+      targetMatchField: request.targetMatchField,
+    });
+
+    const sourceApp = await getAppStructureDetailed(request.sourceAppId);
+    const targetApp = await getAppStructureDetailed(request.targetAppId);
+
+    const sourceField = sourceApp.fields?.find(f => f.external_id === request.sourceMatchField);
+    const targetField = targetApp.fields?.find(f => f.external_id === request.targetMatchField);
+
+    if (!sourceField) {
+      throw new Error(
+        `Source match field not found: "${request.sourceMatchField}" does not exist in source app ${request.sourceAppId}`
+      );
+    }
+
+    if (!targetField) {
+      throw new Error(
+        `Target match field not found: "${request.targetMatchField}" does not exist in target app ${request.targetAppId}`
+      );
+    }
+
+    // Validate field types are suitable for matching
+    validateMatchFieldType(sourceField.type, sourceField.label, 'source');
+    validateMatchFieldType(targetField.type, targetField.label, 'target');
+
+    logger.info('Match field validation passed', {
+      sourceField: { external_id: sourceField.external_id, label: sourceField.label, type: sourceField.type },
+      targetField: { external_id: targetField.external_id, label: targetField.label, type: targetField.type },
+    });
+  }
 
   // Build field mapping if not provided
   let fieldMapping = request.fieldMapping;
@@ -59,6 +159,7 @@ export async function createItemMigrationJob(
       stopOnError: request.stopOnError || false,
       resumeToken: request.resumeToken,
       maxItems: request.maxItems,
+      dryRun: request.dryRun,
     }
   );
 
@@ -175,7 +276,9 @@ export async function getItemMigrationJob(
             : job.progress.preRetrySnapshot.lastUpdate.toISOString(),
         }
       : undefined,
-  };
+    // Include dry-run preview if available
+    dryRunPreview: metadata?.dryRunPreview || undefined,
+  } as any;
 }
 
 /**

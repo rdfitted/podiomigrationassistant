@@ -69,6 +69,8 @@ export interface MigrationConfig {
   maxItems?: number;
   /** Specific source item IDs to retry (for retry operations) */
   retryItemIds?: number[];
+  /** Dry-run mode: preview changes without executing (UPDATE mode only) */
+  dryRun?: boolean;
   /** Progress callback */
   onProgress?: (progress: { total: number; processed: number; successful: number; failed: number }) => void | Promise<void>;
 }
@@ -117,6 +119,69 @@ export interface MigrationResult {
   duplicatesSkipped?: number;
   /** Duplicates updated count */
   duplicatesUpdated?: number;
+  /** Dry-run preview (only present when dryRun=true) */
+  dryRunPreview?: DryRunPreview;
+}
+
+/**
+ * Field change preview for dry-run mode
+ */
+export interface FieldChange {
+  /** Field external ID */
+  fieldExternalId: string;
+  /** Field label (human-readable name) */
+  fieldLabel?: string;
+  /** Current value in target item */
+  currentValue: unknown;
+  /** New value from source item */
+  newValue: unknown;
+  /** Whether values are different */
+  willChange: boolean;
+}
+
+/**
+ * Update preview for a single item (dry-run mode)
+ */
+export interface UpdatePreview {
+  /** Source item ID */
+  sourceItemId: number;
+  /** Target item ID that would be updated */
+  targetItemId: number;
+  /** Match field value used to find this item */
+  matchValue: unknown;
+  /** Fields that would change */
+  changes: FieldChange[];
+  /** Total number of fields that would change */
+  changeCount: number;
+}
+
+/**
+ * Dry-run preview result
+ */
+export interface DryRunPreview {
+  /** Items that would be successfully updated */
+  wouldUpdate: UpdatePreview[];
+  /** Items that would fail (no match found) */
+  wouldFail: Array<{
+    sourceItemId: number;
+    matchValue: unknown;
+    reason: string;
+  }>;
+  /** Items that would be skipped (no changes detected) */
+  wouldSkip: Array<{
+    sourceItemId: number;
+    targetItemId: number;
+    matchValue: unknown;
+    reason: string;
+  }>;
+  /** Summary statistics */
+  summary: {
+    totalSourceItems: number;
+    wouldUpdateCount: number;
+    wouldFailCount: number;
+    wouldSkipCount: number;
+    totalFieldChanges: number;
+  };
 }
 
 /**
@@ -389,6 +454,75 @@ export class ItemMigrator {
   }
 
   /**
+   * Compare two field values to determine if they're different
+   * Uses deep equality for objects and arrays
+   */
+  private compareFieldValues(value1: unknown, value2: unknown): boolean {
+    // Normalize both values for comparison
+    const normalized1 = normalizeForMatch(value1);
+    const normalized2 = normalizeForMatch(value2);
+
+    // If both normalize to empty, they're equal
+    if (normalized1 === '' && normalized2 === '') {
+      return false; // No change
+    }
+
+    // Compare normalized values
+    return normalized1 !== normalized2;
+  }
+
+  /**
+   * Generate update preview for a single item (dry-run mode)
+   * Compares source item fields with target item fields to detect changes
+   */
+  private async generateUpdatePreview(
+    sourceItem: PodioItem,
+    targetItem: PodioItem,
+    mappedFields: Record<string, unknown>,
+    externalIdFieldMapping: Record<string, string>,
+    matchValue: unknown
+  ): Promise<UpdatePreview> {
+    const changes: FieldChange[] = [];
+
+    // Get target app structure for field labels
+    const appStructureCache = getAppStructureCache();
+    const targetApp = await appStructureCache.getAppStructure(targetItem.app.app_id);
+
+    // For each mapped field, compare current vs new value
+    for (const [targetExternalId, newValue] of Object.entries(mappedFields)) {
+      // Find current value in target item
+      const targetField = targetItem.fields.find(f => f.external_id === targetExternalId);
+      const currentValue = targetField ? extractFieldValue(targetField) : null;
+
+      // Find field label
+      const targetFieldDef = targetApp.fields?.find(f => f.external_id === targetExternalId);
+      const fieldLabel = targetFieldDef?.label || targetExternalId;
+
+      // Compare values
+      const willChange = this.compareFieldValues(currentValue, newValue);
+
+      changes.push({
+        fieldExternalId: targetExternalId,
+        fieldLabel,
+        currentValue,
+        newValue,
+        willChange,
+      });
+    }
+
+    // Count how many fields will actually change
+    const changeCount = changes.filter(c => c.willChange).length;
+
+    return {
+      sourceItemId: sourceItem.item_id,
+      targetItemId: targetItem.item_id,
+      matchValue,
+      changes,
+      changeCount,
+    };
+  }
+
+  /**
    * Execute a migration
    */
   async executeMigration(config: MigrationConfig): Promise<MigrationResult> {
@@ -398,7 +532,13 @@ export class ItemMigrator {
       sourceAppId: config.sourceAppId,
       targetAppId: config.targetAppId,
       mode: config.mode,
+      dryRun: config.dryRun,
     });
+
+    // Validate: dry-run is only supported for UPDATE and UPSERT modes
+    if (config.dryRun && config.mode !== 'update' && config.mode !== 'upsert') {
+      throw new Error(`Dry-run mode is only supported for UPDATE and UPSERT operations. Current mode: ${config.mode}`);
+    }
 
     // ONLY validate for CREATE mode
     if (config.mode === 'create') {
@@ -527,7 +667,21 @@ export class ItemMigrator {
 
       // Prepare collections for different operations
       const itemsToCreate: CreateItemRequest[] = [];
-      const itemsToUpdate: Array<{ itemId: number; fields: Record<string, unknown> }> = [];
+      const itemsToUpdate: Array<{ itemId: number; fields: Record<string, unknown>; sourceItemId?: number }> = [];
+
+      // Dry-run mode: track additional info for preview
+      const dryRunUpdateInfo: Array<{
+        sourceItem: PodioItem;
+        targetItem: PodioItem;
+        matchValue: unknown;
+        fields: Record<string, unknown>;
+      }> = [];
+      const dryRunFailedMatches: Array<{
+        sourceItemId: number;
+        matchValue: unknown;
+        reason: string;
+      }> = [];
+
       let skippedCount = 0;
       let updatedDuplicatesCount = 0;
       const maxItems = config.maxItems || Infinity;
@@ -777,6 +931,7 @@ export class ItemMigrator {
                       itemsToUpdate.push({
                         itemId: existingItem.item_id,
                         fields: mappedFields,
+                        sourceItemId: sourceItem.item_id, // Track source item ID for error reporting
                       });
                       continue;
                     }
@@ -844,7 +999,18 @@ export class ItemMigrator {
                   itemsToUpdate.push({
                     itemId: existingItem.item_id,
                     fields: mappedFields,
+                    sourceItemId: sourceItem.item_id, // Track source item ID for error reporting
                   });
+
+                  // Dry-run mode: capture additional info for preview
+                  if (config.dryRun) {
+                    dryRunUpdateInfo.push({
+                      sourceItem,
+                      targetItem: existingItem,
+                      matchValue,
+                      fields: mappedFields,
+                    });
+                  }
                 } else {
                   migrationLogger.warn('Item not found for update', {
                     sourceItemId: sourceItem.item_id,
@@ -852,11 +1018,23 @@ export class ItemMigrator {
                     targetMatchField,
                     matchValue,
                   });
-                  result.failedItems.push({
+
+                  // Track failed match
+                  const failedMatch = {
                     sourceItemId: sourceItem.item_id,
                     error: `No matching item found for ${sourceMatchField}=${matchValue}`,
                     index: result.failedItems.length,
-                  });
+                  };
+                  result.failedItems.push(failedMatch);
+
+                  // Dry-run mode: capture failed match info
+                  if (config.dryRun) {
+                    dryRunFailedMatches.push({
+                      sourceItemId: sourceItem.item_id,
+                      matchValue,
+                      reason: `No matching item found for ${sourceMatchField}=${matchValue}`,
+                    });
+                  }
                 }
               } else {
                 // Source match field not found - skip item (can't update without match field)
@@ -865,11 +1043,22 @@ export class ItemMigrator {
                   sourceMatchField,
                   availableFields: sourceItem.fields.map(f => f.external_id),
                 });
-                result.failedItems.push({
+
+                const failedMatch = {
                   sourceItemId: sourceItem.item_id,
                   error: `Source match field '${sourceMatchField}' not found in item`,
                   index: result.failedItems.length,
-                });
+                };
+                result.failedItems.push(failedMatch);
+
+                // Dry-run mode: capture failed match info
+                if (config.dryRun) {
+                  dryRunFailedMatches.push({
+                    sourceItemId: sourceItem.item_id,
+                    matchValue: null,
+                    reason: `Source match field '${sourceMatchField}' not found in item`,
+                  });
+                }
               }
             }
           }
@@ -911,16 +1100,76 @@ export class ItemMigrator {
       // Process updates first (if any)
       let updateResult;
       if (itemsToUpdate.length > 0) {
-        migrationLogger.info('Processing updates', {
-          count: itemsToUpdate.length,
-        });
+        // DRY-RUN MODE: Generate preview instead of executing updates
+        if (config.dryRun && (config.mode === 'update' || config.mode === 'upsert')) {
+          migrationLogger.info('Dry-run mode: Generating update preview', {
+            count: itemsToUpdate.length,
+          });
 
-        try {
-          updateResult = await processor.processUpdate(itemsToUpdate);
-          // Note: result.successful/failed/processed already updated by progress event handler
-        } catch (error) {
-          // Check if error is due to stale cache (deleted fields)
-          if (isFieldNotFoundError(error)) {
+          // Generate preview for each update
+          const updatePreviews: UpdatePreview[] = [];
+          const skippedPreviews: DryRunPreview['wouldSkip'] = [];
+
+          for (const updateInfo of dryRunUpdateInfo) {
+            const preview = await this.generateUpdatePreview(
+              updateInfo.sourceItem,
+              updateInfo.targetItem,
+              updateInfo.fields,
+              externalIdFieldMapping,
+              updateInfo.matchValue
+            );
+
+            // Skip items with no changes
+            if (preview.changeCount === 0) {
+              skippedPreviews.push({
+                sourceItemId: preview.sourceItemId,
+                targetItemId: preview.targetItemId,
+                matchValue: updateInfo.matchValue,
+                reason: 'No field changes detected - values are identical',
+              });
+            } else {
+              updatePreviews.push(preview);
+            }
+          }
+
+          // Build dry-run preview result
+          const dryRunPreview: DryRunPreview = {
+            wouldUpdate: updatePreviews,
+            wouldFail: dryRunFailedMatches,
+            wouldSkip: skippedPreviews,
+            summary: {
+              totalSourceItems: dryRunUpdateInfo.length + dryRunFailedMatches.length,
+              wouldUpdateCount: updatePreviews.length,
+              wouldFailCount: dryRunFailedMatches.length,
+              wouldSkipCount: skippedPreviews.length,
+              totalFieldChanges: updatePreviews.reduce((sum, p) => sum + p.changeCount, 0),
+            },
+          };
+
+          result.dryRunPreview = dryRunPreview;
+
+          // In dry-run mode, mark everything as successful (no actual execution)
+          result.successful = updatePreviews.length;
+          result.processed = dryRunUpdateInfo.length + dryRunFailedMatches.length;
+
+          migrationLogger.info('Dry-run preview generated', {
+            wouldUpdate: updatePreviews.length,
+            wouldFail: dryRunFailedMatches.length,
+            wouldSkip: skippedPreviews.length,
+            totalFieldChanges: dryRunPreview.summary.totalFieldChanges,
+          });
+        } else {
+          // NORMAL MODE: Execute updates
+          migrationLogger.info('Processing updates', {
+            count: itemsToUpdate.length,
+          });
+
+          try {
+            updateResult = await processor.processUpdate(itemsToUpdate);
+            // Note: result.successful/failed/processed already updated by progress event handler
+          } catch (error) {
+            // Check if error is due to stale cache (deleted fields)
+            if (isFieldNotFoundError(error)) {
             migrationLogger.warn('Field not found error detected during update - clearing caches and retrying', {
               error: error instanceof Error ? error.message : String(error),
             });
@@ -933,12 +1182,13 @@ export class ItemMigrator {
             appStructureCache.clearAppStructure(config.sourceAppId);
             appStructureCache.clearAppStructure(config.targetAppId);
 
-            // Retry once with fresh cache
-            migrationLogger.info('Retrying update operation after cache clear');
-            updateResult = await processor.processUpdate(itemsToUpdate);
-          } else {
-            // Re-throw if not a field error
-            throw error;
+              // Retry once with fresh cache
+              migrationLogger.info('Retrying update operation after cache clear');
+              updateResult = await processor.processUpdate(itemsToUpdate);
+            } else {
+              // Re-throw if not a field error
+              throw error;
+            }
           }
         }
       }
@@ -982,7 +1232,7 @@ export class ItemMigrator {
       if (updateResult) {
         for (const item of updateResult.failedItems) {
           result.failedItems.push({
-            sourceItemId: 0, // Update doesn't track source ID
+            sourceItemId: item.sourceItemId || 0, // Now tracked from batch processor
             error: item.error,
             index: item.index,
           });
@@ -990,7 +1240,7 @@ export class ItemMigrator {
           // Save to state store with classified error
           if (item.classifiedError) {
             await migrationStateStore.addFailedItem(migrationJob.id, {
-              sourceItemId: 0,
+              sourceItemId: item.sourceItemId || 0, // Now tracked from batch processor
               targetItemId: (item.data as any).itemId,
               error: item.error,
               errorCategory: item.classifiedError.category,
