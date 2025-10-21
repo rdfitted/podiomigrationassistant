@@ -20,7 +20,7 @@ export interface UpdatePreview {
 
 export interface CreatePreview {
   sourceItemId: number;
-  matchValue?: unknown | null;
+  matchValue: unknown | null;
   fields: Array<{
     fieldExternalId: string;
     fieldLabel?: string;
@@ -31,9 +31,9 @@ export interface CreatePreview {
 
 export interface DryRunPreviewData {
   mode: 'create' | 'update' | 'upsert';
-  // For CREATE mode
+  // For CREATE and UPSERT modes (UPSERT creates non-duplicates)
   wouldCreate?: CreatePreview[];
-  // For UPDATE/UPSERT modes
+  // For UPDATE and UPSERT modes (UPSERT updates duplicates)
   wouldUpdate?: UpdatePreview[];
   // Common to all modes
   wouldFail: Array<{
@@ -69,9 +69,19 @@ export interface DryRunPreviewProps {
  */
 export function DryRunPreview({ preview, onExecute, onReset }: DryRunPreviewProps) {
   const [expandedItems, setExpandedItems] = useState<Set<number>>(new Set());
-  const [activeTab, setActiveTab] = useState<'create' | 'update' | 'fail' | 'skip'>(
-    preview.mode === 'create' ? 'create' : 'update'
-  );
+
+  // Determine initial tab based on mode and available data
+  const getInitialTab = (): 'create' | 'update' | 'fail' | 'skip' => {
+    if (preview.mode === 'create') return 'create';
+    if (preview.mode === 'update') return 'update';
+    // For UPSERT, default to 'create' if there are items to create, else 'update'
+    if (preview.mode === 'upsert') {
+      return (preview.summary.wouldCreateCount ?? 0) > 0 ? 'create' : 'update';
+    }
+    return 'update';
+  };
+
+  const [activeTab, setActiveTab] = useState<'create' | 'update' | 'fail' | 'skip'>(getInitialTab());
 
   const { summary, mode } = preview;
 
@@ -176,7 +186,8 @@ export function DryRunPreview({ preview, onExecute, onReset }: DryRunPreviewProp
       {/* Tabs */}
       <div className="border-b border-gray-200 dark:border-gray-700">
         <nav className="-mb-px flex space-x-8">
-          {mode === 'create' ? (
+          {/* Show CREATE tab for CREATE and UPSERT modes */}
+          {(mode === 'create' || mode === 'upsert') && (
             <button
               onClick={() => setActiveTab('create')}
               className={`py-2 px-1 border-b-2 font-medium text-sm ${
@@ -187,7 +198,9 @@ export function DryRunPreview({ preview, onExecute, onReset }: DryRunPreviewProp
             >
               Would Create ({summary.wouldCreateCount || 0})
             </button>
-          ) : (
+          )}
+          {/* Show UPDATE tab for UPDATE and UPSERT modes */}
+          {(mode === 'update' || mode === 'upsert') && (
             <button
               onClick={() => setActiveTab('update')}
               className={`py-2 px-1 border-b-2 font-medium text-sm ${

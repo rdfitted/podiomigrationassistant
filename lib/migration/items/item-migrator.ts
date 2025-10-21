@@ -1355,30 +1355,65 @@ export class ItemMigrator {
           }
 
           // Build dry-run preview result for CREATE mode
-          const dryRunPreview: DryRunPreview = {
-            mode: config.mode,
-            wouldCreate: createPreviews,
-            wouldFail: dryRunFailedMatches,
-            wouldSkip: dryRunSkippedItems,
-            summary: {
-              totalSourceItems: dryRunCreateInfo.length + dryRunFailedMatches.length + dryRunSkippedItems.length,
-              wouldCreateCount: createPreviews.length,
-              wouldFailCount: dryRunFailedMatches.length,
-              wouldSkipCount: dryRunSkippedItems.length,
-            },
-          };
-
-          result.dryRunPreview = dryRunPreview;
+          // For UPSERT mode, merge with existing update preview if present
+          if (config.mode === 'upsert' && result.dryRunPreview) {
+            // Merge create preview into existing update preview
+            const existingPreview = result.dryRunPreview;
+            result.dryRunPreview = {
+              mode: config.mode,
+              wouldCreate: createPreviews,
+              wouldUpdate: existingPreview.wouldUpdate,
+              wouldFail: dryRunFailedMatches,
+              wouldSkip: [...(existingPreview.wouldSkip || []), ...dryRunSkippedItems],
+              summary: {
+                totalSourceItems: dryRunCreateInfo.length + (existingPreview.summary.totalSourceItems || 0),
+                wouldCreateCount: createPreviews.length,
+                wouldUpdateCount: existingPreview.summary.wouldUpdateCount,
+                wouldFailCount: dryRunFailedMatches.length,
+                wouldSkipCount: (existingPreview.summary.wouldSkipCount || 0) + dryRunSkippedItems.length,
+                totalFieldChanges: existingPreview.summary.totalFieldChanges,
+              },
+            };
+          } else {
+            // CREATE mode only - new preview
+            const dryRunPreview: DryRunPreview = {
+              mode: config.mode,
+              wouldCreate: createPreviews,
+              wouldFail: dryRunFailedMatches,
+              wouldSkip: dryRunSkippedItems,
+              summary: {
+                totalSourceItems: dryRunCreateInfo.length + dryRunFailedMatches.length + dryRunSkippedItems.length,
+                wouldCreateCount: createPreviews.length,
+                wouldFailCount: dryRunFailedMatches.length,
+                wouldSkipCount: dryRunSkippedItems.length,
+              },
+            };
+            result.dryRunPreview = dryRunPreview;
+          }
 
           // In dry-run mode, mark everything as successful (no actual execution)
-          result.successful = createPreviews.length;
-          result.processed = dryRunCreateInfo.length + dryRunFailedMatches.length + dryRunSkippedItems.length;
+          // For UPSERT, include both creates and updates in success count
+          if (config.mode === 'upsert' && result.dryRunPreview) {
+            result.successful = createPreviews.length + (result.dryRunPreview.summary.wouldUpdateCount || 0);
+            result.processed = result.dryRunPreview.summary.totalSourceItems;
 
-          migrationLogger.info('Dry-run preview generated', {
-            wouldCreate: createPreviews.length,
-            wouldFail: dryRunFailedMatches.length,
-            wouldSkip: dryRunSkippedItems.length,
-          });
+            migrationLogger.info('Dry-run preview generated (UPSERT)', {
+              wouldCreate: createPreviews.length,
+              wouldUpdate: result.dryRunPreview.summary.wouldUpdateCount,
+              wouldFail: dryRunFailedMatches.length,
+              wouldSkip: result.dryRunPreview.summary.wouldSkipCount,
+              totalFieldChanges: result.dryRunPreview.summary.totalFieldChanges,
+            });
+          } else {
+            result.successful = createPreviews.length;
+            result.processed = dryRunCreateInfo.length + dryRunFailedMatches.length + dryRunSkippedItems.length;
+
+            migrationLogger.info('Dry-run preview generated (CREATE)', {
+              wouldCreate: createPreviews.length,
+              wouldFail: dryRunFailedMatches.length,
+              wouldSkip: dryRunSkippedItems.length,
+            });
+          }
         } else {
           // NORMAL MODE: Execute creates
           migrationLogger.info('Processing creates', {
