@@ -125,6 +125,7 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
       resumeToken: metadata.resumeToken,
       maxItems: metadata.maxItems,
       dryRun: metadata.dryRun, // Pass dry-run mode
+      transferFiles: metadata.transferFiles, // Pass file transfer mode
       retryItemIds: retryItemIds.length > 0 ? retryItemIds : undefined,
       onProgress: async (progress) => {
         // Check for pause request

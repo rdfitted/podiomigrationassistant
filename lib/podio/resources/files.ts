@@ -59,6 +59,9 @@ export async function getFile(
 
 /**
  * Download file content as buffer
+ *
+ * Uses the Podio API endpoint GET /file/{file_id}/raw to download the file
+ * in its original format with proper authentication.
  */
 export async function downloadFile(
   client: PodioHttpClient,
@@ -67,17 +70,29 @@ export async function downloadFile(
   logger.info('Downloading file', { fileId });
 
   try {
-    // Get file info first to get the download link
+    // Get file info first for metadata and logging
     const fileInfo = await getFile(client, fileId);
 
-    // Use the raw link for download (bypasses OAuth requirement)
-    // Podio file links are publicly accessible with the correct URL
-    const response = await fetch(fileInfo.link);
+    // Download the raw file using the Podio API endpoint /file/{file_id}/raw
+    // We need to handle this manually because the HTTP client always parses JSON
+    const authManager = await getPodioAuthManager();
+    const accessToken = await authManager.getAccessToken();
+    const apiBase = loadPodioConfig().apiBase;
+
+    const response = await fetch(`${apiBase}/file/${fileId}/raw`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `OAuth2 ${accessToken}`,
+      },
+    });
 
     if (!response.ok) {
-      throw new Error(`Failed to download file: ${response.statusText}`);
+      throw new Error(
+        `Failed to download file: ${response.status} ${response.statusText}`
+      );
     }
 
+    // Convert response to buffer
     const arrayBuffer = await response.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
@@ -120,9 +135,15 @@ export async function uploadFile(
     // Create form data for file upload using native FormData (Node.js 18+)
     const formData = new FormData();
 
-    // Create a Blob from the buffer for the native FormData API
-    const blob = new Blob([fileBuffer], { type: 'application/octet-stream' });
-    formData.append('source', blob, fileName);
+    // Create a File object from the buffer for proper file upload
+    // Using File instead of Blob ensures proper multipart encoding with filename
+    const file = new File([fileBuffer], fileName, {
+      type: 'application/octet-stream',
+    });
+
+    // Podio API requires TWO parameters: 'source' (file contents) and 'filename' (file name)
+    formData.append('source', file);
+    formData.append('filename', fileName);
 
     if (options.description) {
       formData.append('description', options.description);
@@ -137,7 +158,7 @@ export async function uploadFile(
       async () => {
         const accessToken = await authManager.getAccessToken();
 
-        const res = await fetch(`${apiBase}/file/v2/`, {
+        const res = await fetch(`${apiBase}/file/`, {
           method: 'POST',
           headers: {
             'Authorization': `OAuth2 ${accessToken}`,
@@ -169,7 +190,7 @@ export async function uploadFile(
         return responseData as FileUploadResponse;
       },
       createRetryConfig({ maxAttempts: 3 }),
-      { method: 'POST', url: '/file/v2/' }
+      { method: 'POST', url: '/file/' }
     );
 
     logger.info('Uploaded file', {
@@ -214,6 +235,9 @@ export async function attachFileToItem(
 
 /**
  * Get all files attached to an item
+ *
+ * Note: Podio doesn't have a dedicated /item/{id}/file/ endpoint.
+ * Files are included in the item response when you GET the item.
  */
 export async function getItemFiles(
   client: PodioHttpClient,
@@ -222,12 +246,19 @@ export async function getItemFiles(
   logger.info('Getting item files', { itemId });
 
   try {
-    const response = await client.get<PodioFile[]>(`/item/${itemId}/file/`);
+    // Get the full item which includes files
+    const item = await client.get<{
+      item_id: number;
+      files?: PodioFile[];
+    }>(`/item/${itemId}`);
+
+    const files = item.files || [];
+
     logger.info('Retrieved item files', {
       itemId,
-      fileCount: response.length
+      fileCount: files.length
     });
-    return response;
+    return files;
   } catch (error) {
     logger.error('Failed to get item files', { itemId, error });
     throw error;
@@ -281,15 +312,20 @@ export async function transferItemFiles(
       const batch = sourceFiles.slice(i, i + concurrentTransfers);
       const transferResults = await Promise.allSettled(
         batch.map(async (sourceFile) => {
+          // Get complete file info if not present (files array may only have file_id)
+          const fileInfo = sourceFile.name
+            ? sourceFile
+            : await getFile(client, sourceFile.file_id);
+
           // Download file content
           const fileBuffer = await downloadFile(client, sourceFile.file_id);
 
-          // Upload to Podio
+          // Upload to Podio with the correct filename
           const uploadedFile = await uploadFile(
             client,
-            sourceFile.name,
+            fileInfo.name,
             fileBuffer,
-            { description: sourceFile.description }
+            { description: fileInfo.description }
           );
 
           // Attach to target item
@@ -300,7 +336,7 @@ export async function transferItemFiles(
             targetItemId,
             sourceFileId: sourceFile.file_id,
             targetFileId: uploadedFile.file_id,
-            fileName: sourceFile.name,
+            fileName: fileInfo.name,
           });
 
           return uploadedFile.file_id;

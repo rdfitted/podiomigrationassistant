@@ -95,6 +95,8 @@ export async function POST(request: NextRequest) {
       batchSize: body.batchSize,
       concurrency: body.concurrency,
       maxItems: body.maxItems,
+      transferFiles: body.transferFiles,
+      dryRun: body.dryRun,
     });
 
     // Validate required fields

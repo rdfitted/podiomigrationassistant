@@ -358,10 +358,22 @@ export async function updateItem(
 
     const url = `/item/${itemId}?${queryParams.toString()}`;
 
-    const response = await client.put<{ revision: number }>(
+    const response = await client.put<{ revision: number } | undefined>(
       url,
       { fields }
     );
+
+    // Handle 204 No Content response (no body returned)
+    // This happens when silent=true or in other cases where Podio doesn't return a response body
+    if (!response) {
+      logger.info('Updated item (204 No Content)', {
+        itemId,
+        revision: 'not-returned',
+        hookEnabled: hook,
+      });
+      return { revision: 0 }; // Return a default revision when none is provided
+    }
+
     logger.info('Updated item', {
       itemId,
       revision: response.revision,

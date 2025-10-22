@@ -160,6 +160,7 @@ export async function createItemMigrationJob(
       resumeToken: request.resumeToken,
       maxItems: request.maxItems,
       dryRun: request.dryRun,
+      transferFiles: request.transferFiles,
     }
   );
 
