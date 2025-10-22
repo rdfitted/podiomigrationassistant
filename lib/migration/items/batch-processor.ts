@@ -399,16 +399,42 @@ export class ItemBatchProcessor extends EventEmitter {
       });
 
       try {
-        const batchResult = await bulkUpdateItems(
-          this.client,
-          batch,
-          {
-            concurrency: this.config.concurrency,
-            stopOnError: this.config.stopOnError,
-            retryConfig: { maxAttempts: this.config.maxRetries },
-            silent: this.config.silent,
-          }
-        );
+        // Check if this is a file-only migration (empty fields + transferFiles enabled)
+        const isFileOnlyMigration = this.config.transferFiles &&
+          batch.every(update => Object.keys(update.fields).length === 0);
+
+        let batchResult: BulkUpdateResult;
+
+        if (isFileOnlyMigration) {
+          // File-only migration: Skip item updates, only transfer files
+          migrationLogger.info('File-only migration detected - skipping field updates', {
+            batchNumber: batchNum + 1,
+            itemCount: batch.length,
+          });
+
+          // Create a mock successful result (no actual API calls for updates)
+          batchResult = {
+            successful: batch.map((update, idx) => ({
+              itemId: update.itemId,
+              revision: 0, // No revision change since we didn't update
+            })),
+            failed: [],
+            successCount: batch.length,
+            failureCount: 0,
+          };
+        } else {
+          // Normal migration: Update item fields
+          batchResult = await bulkUpdateItems(
+            this.client,
+            batch,
+            {
+              concurrency: this.config.concurrency,
+              stopOnError: this.config.stopOnError,
+              retryConfig: { maxAttempts: this.config.maxRetries },
+              silent: this.config.silent,
+            }
+          );
+        }
 
         // If file transfer is enabled, transfer files from source to target
         let transferItemFiles: ((client: PodioHttpClient, sourceItemId: number, targetItemId: number) => Promise<number[]>) | null = null;
