@@ -25,7 +25,7 @@ export interface CleanupExecutorConfig {
   appId: number;
   matchField: string;
   mode: CleanupMode;
-  keepStrategy: KeepStrategy;
+  keepStrategy: 'oldest' | 'newest'; // Normalized - 'manual' is handled at request level
   batchSize: number;
   concurrency: number;
   dryRun: boolean;
@@ -338,11 +338,15 @@ export async function executeCleanup(
   jobId: string,
   request: CleanupRequestPayload
 ): Promise<CleanupResult | CleanupDryRunPreview> {
+  // Normalize keepStrategy: 'manual' is only for manual mode, use 'oldest' as default
+  const normalizedKeepStrategy: 'oldest' | 'newest' =
+    request.keepStrategy === 'newest' ? 'newest' : 'oldest';
+
   const executor = new CleanupExecutor(client, jobId, {
     appId: request.appId,
     matchField: request.matchField,
     mode: request.mode,
-    keepStrategy: request.keepStrategy || 'oldest',
+    keepStrategy: normalizedKeepStrategy,
     batchSize: request.batchSize || 100,
     concurrency: request.concurrency || 3,
     dryRun: request.dryRun || false,
