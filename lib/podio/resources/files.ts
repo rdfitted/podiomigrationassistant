@@ -126,15 +126,16 @@ export async function uploadFile(
       formData.append('description', options.description);
     }
 
+    // Load dependencies once outside the retry loop
+    const { getPodioAuthManager } = await import('../auth');
+    const authManager = await getPodioAuthManager();
+    const config = await import('../config');
+    const apiBase = config.loadPodioConfig().apiBase;
+
     // Upload the file using native fetch with FormData
     const response = await withRetry(
       async () => {
-        const { getPodioAuthManager } = await import('../auth');
-        const authManager = await getPodioAuthManager();
         const accessToken = await authManager.getAccessToken();
-
-        const config = await import('../config');
-        const apiBase = config.loadPodioConfig().apiBase;
 
         const res = await fetch(`${apiBase}/file/v2/`, {
           method: 'POST',
@@ -254,43 +255,54 @@ export async function transferItemFiles(
     });
 
     const newFileIds: number[] = [];
+    const concurrentTransfers = 3;
 
-    // Download and re-upload each file
-    for (const sourceFile of sourceFiles) {
-      try {
-        // Download file content
-        const fileBuffer = await downloadFile(client, sourceFile.file_id);
+    // Download and re-upload files with controlled concurrency
+    for (let i = 0; i < sourceFiles.length; i += concurrentTransfers) {
+      const batch = sourceFiles.slice(i, i + concurrentTransfers);
+      const transferResults = await Promise.allSettled(
+        batch.map(async (sourceFile) => {
+          // Download file content
+          const fileBuffer = await downloadFile(client, sourceFile.file_id);
 
-        // Upload to Podio
-        const uploadedFile = await uploadFile(
-          client,
-          sourceFile.name,
-          fileBuffer,
-          { description: sourceFile.description }
-        );
+          // Upload to Podio
+          const uploadedFile = await uploadFile(
+            client,
+            sourceFile.name,
+            fileBuffer,
+            { description: sourceFile.description }
+          );
 
-        // Attach to target item
-        await attachFileToItem(client, targetItemId, uploadedFile.file_id);
+          // Attach to target item
+          await attachFileToItem(client, targetItemId, uploadedFile.file_id);
 
-        newFileIds.push(uploadedFile.file_id);
+          logger.info('Transferred file', {
+            sourceItemId,
+            targetItemId,
+            sourceFileId: sourceFile.file_id,
+            targetFileId: uploadedFile.file_id,
+            fileName: sourceFile.name,
+          });
 
-        logger.info('Transferred file', {
-          sourceItemId,
-          targetItemId,
-          sourceFileId: sourceFile.file_id,
-          targetFileId: uploadedFile.file_id,
-          fileName: sourceFile.name,
-        });
-      } catch (error) {
-        logger.error('Failed to transfer file', {
-          sourceItemId,
-          targetItemId,
-          fileId: sourceFile.file_id,
-          fileName: sourceFile.name,
-          error,
-        });
-        // Continue with next file instead of throwing
-      }
+          return uploadedFile.file_id;
+        })
+      );
+
+      transferResults.forEach((result, idx) => {
+        const sourceFile = batch[idx];
+        if (result.status === 'fulfilled') {
+          newFileIds.push(result.value);
+        } else {
+          const error = result.reason;
+          logger.error('Failed to transfer file', {
+            sourceItemId,
+            targetItemId,
+            fileId: sourceFile.file_id,
+            fileName: sourceFile.name,
+            error,
+          });
+        }
+      });
     }
 
     logger.info('Completed file transfer', {
