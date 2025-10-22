@@ -153,9 +153,10 @@ async function parallelBatchProcessing(
 
 ### Podio API Rate Limits
 
-- **Standard**: ~250 requests per hour per app
-- **Premium**: ~5,000 requests per hour per app
-- **Headers**: `X-Rate-Limit-Remaining`, `X-Rate-Limit-Reset`
+- **Dynamic Limits**: Rate limits vary by account type and are provided by Podio via API headers
+- **Detection**: Automatically detected from response headers and 420/429 status codes
+- **Headers**: `X-Rate-Limit-Limit`, `X-Rate-Limit-Remaining`, `X-Rate-Limit-Reset`
+- **Note**: The application tracks and adapts to your account's specific rate limit automatically
 
 ### Rate Limit Strategy
 

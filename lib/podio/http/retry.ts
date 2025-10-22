@@ -96,12 +96,17 @@ export async function withRetry<T>(
             timeUntilResetMs = waitSeconds * 1000;
 
             // Update tracker with calculated reset time
-            const resetTime = new Date(Date.now() + timeUntilResetMs).toISOString();
-            tracker.updateFromHeaders(
-              tracker.getLimit() || 250, // Default Podio limit
-              0, // Remaining is 0 when rate limited
-              resetTime
-            );
+            // Use existing limit if available, otherwise use placeholder
+            // The actual limit will be updated from X-Rate-Limit headers on next successful request
+            const currentLimit = tracker.getLimit();
+            if (currentLimit !== null) {
+              const resetTime = new Date(Date.now() + timeUntilResetMs).toISOString();
+              tracker.updateFromHeaders(
+                currentLimit,
+                0, // Remaining is 0 when rate limited
+                resetTime
+              );
+            }
           }
         }
 
