@@ -511,19 +511,14 @@ export class ItemBatchProcessor extends EventEmitter {
             });
           }
 
-          // If this was a file-only batch, reflect transfer failures in stats/results
+          // If this was a file-only batch, reflect transfer failures in batchResult only
+          // (let unified stats logic handle everything)
           if (isFileOnlyMigration && transferFailureCount > 0) {
             migrationLogger.warn('File-only migration had transfer failures', {
               batchNumber: batchNum + 1,
               transferFailureCount,
               totalBatchItems: batch.length,
             });
-
-            // Adjust stats to reflect file transfer failures
-            this.stats.successful -= transferFailureCount;
-            this.stats.failed += transferFailureCount;
-            result.successful -= transferFailureCount;
-            result.failed += transferFailureCount;
 
             // Update batchResult to mark these items as failed
             transferFailures.forEach(({ sourceItemId, targetItemId, error }) => {
@@ -536,20 +531,8 @@ export class ItemBatchProcessor extends EventEmitter {
 
               // Find the item in the batch to get its index
               const batchIdx = batch.findIndex(u => u.itemId === targetItemId);
-              const globalIndex = batchIdx >= 0 ? start + batchIdx : start;
 
-              // Emit itemFailed event
-              this.emit('itemFailed', globalIndex, error, false);
-
-              // Add to failed items in result
-              result.failedItems.push({
-                index: globalIndex,
-                error: `File transfer failed: ${error}`,
-                data: { itemId: targetItemId, fields: {} },
-                sourceItemId,
-              });
-
-              // Add to batchResult.failed
+              // Add to batchResult.failed (unified loop will handle result.failedItems and stats)
               batchResult.failed.push({
                 itemId: targetItemId,
                 fields: {},
@@ -570,8 +553,12 @@ export class ItemBatchProcessor extends EventEmitter {
         result.failed += batchResult.failureCount;
 
         // Emit item-level events
-        batchResult.successful.forEach((item, idx) => {
-          this.emit('itemSuccess', start + idx, item);
+        // Map itemId → original batch index to avoid misaligned indices after removals
+        const idToBatchIndex = new Map<number, number>(batch.map((u, i) => [u.itemId, i]));
+        batchResult.successful.forEach((item) => {
+          const batchIdx = idToBatchIndex.get(item.itemId);
+          const globalIndex = batchIdx != null ? start + batchIdx : start;
+          this.emit('itemSuccess', globalIndex, item);
         });
 
         batchResult.failed.forEach((failure) => {
