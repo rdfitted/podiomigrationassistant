@@ -56,7 +56,7 @@ export function useRateLimitStatus(options: UseRateLimitStatusOptions = {}) {
   const [isPaused, setIsPaused] = useState<boolean>(false);
 
   const { updateRateLimitInfo, hasActiveJobs } = useMigrationContext();
-  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef<boolean>(true);
   const errorCountRef = useRef<number>(0);
   const isPollingRef = useRef<boolean>(false);

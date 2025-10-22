@@ -19,6 +19,9 @@ export async function GET() {
         isLimited: false,
         timeUntilReset: null,
         percentUsed: null
+      }, {
+        status: 200,
+        headers: { 'Cache-Control': 'no-store' }
       });
     }
 
@@ -35,6 +38,8 @@ export async function GET() {
       timeUntilReset,
       percentUsed,
       lastUpdated: state.lastUpdated.toISOString()
+    }, {
+      headers: { 'Cache-Control': 'no-store' }
     });
   } catch (error) {
     console.error('Error in rate-limit status API:', error);
@@ -48,6 +53,9 @@ export async function GET() {
       isLimited: false,
       timeUntilReset: null,
       percentUsed: null
-    }, { status: 200 }); // Use 200 to prevent client retries
+    }, {
+      status: 200,
+      headers: { 'Cache-Control': 'no-store' }
+    }); // Use 200 to prevent client retries
   }
 }
