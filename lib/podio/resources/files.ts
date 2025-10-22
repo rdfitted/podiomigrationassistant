@@ -1,6 +1,8 @@
 import { PodioHttpClient } from '../http/client';
 import { logger } from '../logging';
 import { withRetry, createRetryConfig } from '../http/retry';
+import { getPodioAuthManager } from '../auth';
+import { loadPodioConfig } from '../config';
 
 /**
  * Podio file
@@ -126,11 +128,9 @@ export async function uploadFile(
       formData.append('description', options.description);
     }
 
-    // Load dependencies once outside the retry loop
-    const { getPodioAuthManager } = await import('../auth');
+    // Get dependencies for file upload
     const authManager = await getPodioAuthManager();
-    const config = await import('../config');
-    const apiBase = config.loadPodioConfig().apiBase;
+    const apiBase = loadPodioConfig().apiBase;
 
     // Upload the file using native fetch with FormData
     const response = await withRetry(
@@ -152,7 +152,21 @@ export async function uploadFile(
           throw new Error(`File upload failed: ${res.statusText} - ${errorText}`);
         }
 
-        return res.json() as Promise<FileUploadResponse>;
+        const responseData = await res.json();
+
+        // Validate response format
+        if (
+          typeof responseData !== 'object' ||
+          typeof responseData.file_id !== 'number' ||
+          typeof responseData.name !== 'string' ||
+          typeof responseData.mimetype !== 'string' ||
+          typeof responseData.size !== 'number' ||
+          typeof responseData.link !== 'string'
+        ) {
+          throw new Error('Invalid file upload response format from Podio API');
+        }
+
+        return responseData as FileUploadResponse;
       },
       createRetryConfig({ maxAttempts: 3 }),
       { method: 'POST', url: '/file/v2/' }
@@ -227,16 +241,22 @@ export async function getItemFiles(
  * @param client - Podio HTTP client
  * @param sourceItemId - Source item ID
  * @param targetItemId - Target item ID
+ * @param options - Transfer options
+ * @param options.concurrentTransfers - Number of concurrent file transfers (default: 3)
  * @returns Array of new file IDs in target item
  */
 export async function transferItemFiles(
   client: PodioHttpClient,
   sourceItemId: number,
-  targetItemId: number
+  targetItemId: number,
+  options: { concurrentTransfers?: number } = {}
 ): Promise<number[]> {
+  const concurrentTransfers = options.concurrentTransfers ?? 3;
+
   logger.info('Transferring files between items', {
     sourceItemId,
-    targetItemId
+    targetItemId,
+    concurrentTransfers
   });
 
   try {
@@ -255,7 +275,6 @@ export async function transferItemFiles(
     });
 
     const newFileIds: number[] = [];
-    const concurrentTransfers = 3;
 
     // Download and re-upload files with controlled concurrency
     for (let i = 0; i < sourceFiles.length; i += concurrentTransfers) {
@@ -312,6 +331,13 @@ export async function transferItemFiles(
       successfulTransfers: newFileIds.length,
       failedTransfers: sourceFiles.length - newFileIds.length,
     });
+
+    // Throw if all transfers failed
+    if (newFileIds.length === 0 && sourceFiles.length > 0) {
+      throw new Error(
+        `All file transfers failed: 0/${sourceFiles.length} files transferred from item ${sourceItemId} to ${targetItemId}`
+      );
+    }
 
     return newFileIds;
   } catch (error) {
