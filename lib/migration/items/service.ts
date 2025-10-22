@@ -413,14 +413,36 @@ export async function buildDefaultFieldMapping(
           mapping[sourceField.field_id.toString()] = targetField.field_id.toString();
           logger.debug('Mapped field by external_id', {
             sourceField: sourceField.external_id,
+            sourceType: sourceField.type,
             targetField: targetField.external_id,
-            type: targetField.type,
+            targetType: targetField.type,
+            crossTypeMatch: sourceField.type !== targetField.type,
           });
+        } else {
+          // Check if there's a match that was skipped due to read-only type
+          const skippedField = targetApp.fields?.find(
+            (f) => f.external_id === sourceField.external_id &&
+                   readOnlyFieldTypes.includes(f.type)
+          );
+          if (skippedField) {
+            logger.debug('Skipped read-only target field in external_id match', {
+              sourceField: sourceField.external_id,
+              sourceType: sourceField.type,
+              targetField: skippedField.external_id,
+              targetType: skippedField.type,
+              reason: 'Target field is read-only (cannot be set via API)',
+            });
+          }
         }
       }
     }
 
     // Second pass: match by label for unmapped fields
+    // Allow cross-type matching if both types are valid for matching
+    const isCompatibleType = (type: string) =>
+      VALID_MATCH_FIELD_TYPES.includes(type) &&
+      !skipAutoMatchFieldTypes.includes(type);
+
     for (const sourceField of sourceApp.fields || []) {
       // Skip app relationship fields in auto-matching
       if (skipAutoMatchFieldTypes.includes(sourceField.type)) {
@@ -431,7 +453,9 @@ export async function buildDefaultFieldMapping(
         const targetField = targetApp.fields?.find(
           (f) =>
             f.label === sourceField.label &&
-            f.type === sourceField.type &&
+            // Allow type mismatch if both are compatible types (e.g., calculation -> text)
+            (f.type === sourceField.type ||
+             (isCompatibleType(sourceField.type) && isCompatibleType(f.type))) &&
             !readOnlyFieldTypes.includes(f.type) && // Exclude read-only target fields
             !skipAutoMatchFieldTypes.includes(f.type) && // Skip app fields
             !Object.values(mapping).includes(f.field_id.toString())
@@ -440,8 +464,10 @@ export async function buildDefaultFieldMapping(
           mapping[sourceField.field_id.toString()] = targetField.field_id.toString();
           logger.debug('Mapped field by label', {
             sourceField: sourceField.label,
+            sourceType: sourceField.type,
             targetField: targetField.label,
-            type: targetField.type,
+            targetType: targetField.type,
+            crossTypeMatch: sourceField.type !== targetField.type,
           });
         }
       }
