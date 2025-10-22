@@ -72,7 +72,7 @@ export function CleanupPanel({ appId }: CleanupPanelProps) {
     await startCleanup({
       matchField,
       mode,
-      keepStrategy: mode === 'automated' ? keepStrategy : 'manual',
+      ...(mode === 'automated' && { keepStrategy }),
       dryRun,
       batchSize,
       concurrency,

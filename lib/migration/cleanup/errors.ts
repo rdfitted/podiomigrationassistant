@@ -9,6 +9,7 @@ export class CleanupJobNotFoundError extends Error {
   constructor(jobId: string) {
     super(`Cleanup job not found: ${jobId}`);
     this.name = 'CleanupJobNotFoundError';
+    Error.captureStackTrace(this, this.constructor);
   }
 }
 
@@ -19,5 +20,6 @@ export class CleanupValidationError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'CleanupValidationError';
+    Error.captureStackTrace(this, this.constructor);
   }
 }

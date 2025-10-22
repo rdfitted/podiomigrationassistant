@@ -64,6 +64,19 @@ export interface CleanupJobMetadata {
 }
 
 /**
+ * Job status union
+ */
+export type JobStatus =
+  | 'planning'
+  | 'detecting'
+  | 'waiting_approval'
+  | 'deleting'
+  | 'completed'
+  | 'failed'
+  | 'paused'
+  | 'cancelled';
+
+/**
  * Cleanup job
  */
 export interface CleanupJob {
@@ -73,7 +86,7 @@ export interface CleanupJob {
   matchField: string;
   mode: CleanupMode;
   keepStrategy: KeepStrategy;
-  status: 'planning' | 'detecting' | 'waiting_approval' | 'deleting' | 'completed' | 'failed' | 'paused' | 'cancelled';
+  status: JobStatus;
   progress?: {
     totalGroups: number; // Total duplicate groups found
     processedGroups: number; // Groups processed
@@ -99,7 +112,7 @@ export interface CleanupJob {
  */
 export interface CleanupStatusResponse {
   jobId: string;
-  status: 'planning' | 'detecting' | 'waiting_approval' | 'deleting' | 'completed' | 'failed' | 'paused' | 'cancelled';
+  status: JobStatus;
   mode: CleanupMode;
   keepStrategy: KeepStrategy;
   progress: {
