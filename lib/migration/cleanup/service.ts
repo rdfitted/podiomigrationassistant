@@ -9,6 +9,7 @@ import { getAppStructureDetailed } from '../../podio/migration';
 import { logger } from '../logging';
 import { normalizeForMatch } from '../items/prefetch-cache';
 import { CleanupJobNotFoundError, CleanupValidationError } from './errors';
+import { PodioHttpClient } from '../../podio/http/client';
 
 /**
  * Field types that are valid for matching
@@ -175,73 +176,88 @@ export async function getCleanupJobStatus(jobId: string): Promise<CleanupStatusR
 }
 
 /**
- * Detect duplicate groups in an app
+ * Detect duplicate groups in an app using efficient streaming with consistent normalization
  * Groups items by match field value and returns groups with duplicates
  */
 export async function detectDuplicateGroups(
+  client: PodioHttpClient,
   appId: number,
-  matchField: string,
-  items: any[]
+  matchField: string
 ): Promise<DuplicateGroup[]> {
-  logger.info('Detecting duplicate groups', {
+  logger.info('Detecting duplicate groups with streaming', {
     appId,
     matchField,
-    itemCount: items.length,
   });
+
+  const startTime = Date.now();
+  let itemsProcessed = 0;
+  let itemsSkipped = 0;
 
   // Group items by normalized match value
   const groups = new Map<string, DuplicateItem[]>();
+  const { streamItems } = await import('../../podio/resources/items');
 
-  for (const item of items) {
-    // Extract match field value
-    const fieldValue = item.fields?.find((f: any) => f.external_id === matchField);
-    if (!fieldValue) {
-      logger.debug('Item missing match field, skipping', {
+  for await (const batch of streamItems(client, appId, {
+    batchSize: 500,
+  })) {
+    for (const item of batch) {
+      itemsProcessed++;
+
+      // Extract match field value
+      const fieldValue = item.fields?.find((f: any) => f.external_id === matchField);
+      if (!fieldValue) {
+        itemsSkipped++;
+        continue;
+      }
+
+      // Extract the actual value from the field
+      let raw = Array.isArray(fieldValue.values) && fieldValue.values.length > 0
+        ? fieldValue.values[0]?.value
+        : fieldValue.value;
+
+      // Unwrap nested objects (e.g., {text: ...}, {value: ...})
+      const matchValue =
+        typeof raw === 'object' && raw !== null
+          ? (raw.text ?? raw.value ?? String(raw))
+          : raw;
+
+      // Normalize the match value using consistent logic
+      const normalizedValue = normalizeForMatch(matchValue);
+
+      // Skip empty values (null, undefined, empty string)
+      if (!normalizedValue) {
+        itemsSkipped++;
+        continue;
+      }
+
+      // Add to group
+      if (!groups.has(normalizedValue)) {
+        groups.set(normalizedValue, []);
+      }
+
+      const duplicateItem: DuplicateItem = {
         itemId: item.item_id,
-        matchField,
-      });
-      continue;
+        title: item.title || `Item ${item.item_id}`,
+        createdOn: item.created_on,
+        lastEditOn: item.last_event_on || item.created_on,
+        matchValue: String(matchValue),
+        fieldValues: {}, // Can add preview fields here if needed
+      };
+
+      groups.get(normalizedValue)!.push(duplicateItem);
     }
-
-    // Extract the actual value from the field
-    let raw = Array.isArray(fieldValue.values) && fieldValue.values.length > 0
-      ? fieldValue.values[0]?.value
-      : fieldValue.value;
-
-    // Unwrap nested objects (e.g., {text: ...}, {value: ...})
-    const matchValue =
-      typeof raw === 'object' && raw !== null
-        ? (raw.text ?? raw.value ?? String(raw))
-        : raw;
-
-    // Normalize the match value
-    const normalizedValue = normalizeForMatch(matchValue);
-
-    // Skip empty values (null, undefined, empty string)
-    if (!normalizedValue) {
-      logger.debug('Item has empty match value, skipping', {
-        itemId: item.item_id,
-        matchField,
-      });
-      continue;
-    }
-
-    // Add to group
-    if (!groups.has(normalizedValue)) {
-      groups.set(normalizedValue, []);
-    }
-
-    const duplicateItem: DuplicateItem = {
-      itemId: item.item_id,
-      title: item.title || `Item ${item.item_id}`,
-      createdOn: item.created_on,
-      lastEditOn: item.last_event_on || item.created_on,
-      matchValue: String(matchValue),
-      fieldValues: {}, // Can add preview fields here if needed
-    };
-
-    groups.get(normalizedValue)!.push(duplicateItem);
   }
+
+  const duration = Date.now() - startTime;
+
+  // Log statistics
+  logger.info('Duplicate detection complete', {
+    itemsProcessed,
+    itemsSkipped,
+    uniqueValues: groups.size,
+    durationMs: duration,
+    itemsPerSecond: Math.round((itemsProcessed / duration) * 1000),
+  });
 
   // Filter to only groups with duplicates (more than 1 item)
   const duplicateGroups: DuplicateGroup[] = [];

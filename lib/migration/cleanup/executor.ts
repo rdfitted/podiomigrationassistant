@@ -5,7 +5,7 @@
 
 import { EventEmitter } from 'events';
 import { PodioHttpClient } from '../../podio/http/client';
-import { streamItems, bulkDeleteItems } from '../../podio/resources/items';
+import { bulkDeleteItems } from '../../podio/resources/items';
 import { logger } from '../logging';
 import { migrationStateStore } from '../state-store';
 import {
@@ -93,20 +93,12 @@ export class CleanupExecutor extends EventEmitter {
       // Update job status to detecting
       await migrationStateStore.updateJobStatus(this.jobId, 'detecting' as any);
 
-      // Step 1: Load all items from the app
+      // Step 1 & 2: Stream items and detect duplicate groups efficiently
       this.emit('detectStart');
-      const items = await this.loadAllItems();
-
-      logger.info('Items loaded', {
-        jobId: this.jobId,
-        itemCount: items.length,
-      });
-
-      // Step 2: Detect duplicate groups
       const duplicateGroups = await detectDuplicateGroups(
+        this.client,
         this.config.appId,
-        this.config.matchField,
-        items
+        this.config.matchField
       );
 
       // Apply max groups limit if specified
@@ -213,25 +205,6 @@ export class CleanupExecutor extends EventEmitter {
     }
   }
 
-  /**
-   * Load all items from the app
-   */
-  private async loadAllItems(): Promise<any[]> {
-    const items: any[] = [];
-
-    for await (const batch of streamItems(this.client, this.config.appId, {
-      batchSize: 500,
-    })) {
-      items.push(...batch);
-      logger.debug('Items batch loaded', {
-        jobId: this.jobId,
-        batchSize: batch.length,
-        totalLoaded: items.length,
-      });
-    }
-
-    return items;
-  }
 
   /**
    * Delete duplicate items
