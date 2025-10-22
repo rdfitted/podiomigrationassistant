@@ -60,9 +60,14 @@ export function useRateLimitStatus(options: UseRateLimitStatusOptions = {}) {
   const mountedRef = useRef<boolean>(true);
   const errorCountRef = useRef<number>(0);
   const isPollingRef = useRef<boolean>(false);
+  const statusRef = useRef(status);
+  const scheduleNextRef = useRef<(() => void) | null>(null);
 
   const fetchStatus = useCallback(async () => {
     if (!mountedRef.current) return;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10_000);
 
     try {
       setIsLoading(true);
@@ -72,8 +77,9 @@ export function useRateLimitStatus(options: UseRateLimitStatusOptions = {}) {
         // Add cache prevention to avoid stale data
         cache: 'no-store',
         // Add timeout to prevent hanging requests
-        signal: AbortSignal.timeout(10000) // 10 second timeout
+        signal: controller.signal
       });
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         throw new Error(`Failed to fetch rate limit status: ${response.statusText}`);
@@ -107,6 +113,7 @@ export function useRateLimitStatus(options: UseRateLimitStatusOptions = {}) {
         });
       }
     } catch (err) {
+      clearTimeout(timeoutId);
       if (!mountedRef.current) return;
 
       errorCountRef.current++;
@@ -134,6 +141,11 @@ export function useRateLimitStatus(options: UseRateLimitStatusOptions = {}) {
     }
   }, [updateRateLimitInfo]);
 
+  // Keep statusRef in sync with status
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
+
   useEffect(() => {
     mountedRef.current = true;
 
@@ -141,10 +153,8 @@ export function useRateLimitStatus(options: UseRateLimitStatusOptions = {}) {
       return;
     }
 
-    // Prevent multiple polling loops
-    if (isPollingRef.current) {
-      return;
-    }
+    // Allow rebuild; clear any existing timeout
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
     isPollingRef.current = true;
 
     // Set up polling loop with error handling
@@ -166,7 +176,7 @@ export function useRateLimitStatus(options: UseRateLimitStatusOptions = {}) {
         // 1. Rate limited (every 2 seconds)
         // 2. Has active jobs (every 3 seconds)
         // 3. Otherwise use default interval
-        if (status.isLimited) {
+        if (statusRef.current.isLimited) {
           interval = 2000;
         } else if (hasActiveJobs()) {
           interval = 3000;
@@ -191,6 +201,7 @@ export function useRateLimitStatus(options: UseRateLimitStatusOptions = {}) {
         }
       }, interval);
     };
+    scheduleNextRef.current = scheduleNext;
 
     // Initial fetch with delay to avoid hydration issues
     const initialTimeout = setTimeout(() => {
@@ -210,15 +221,19 @@ export function useRateLimitStatus(options: UseRateLimitStatusOptions = {}) {
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current);
       }
+      scheduleNextRef.current = null;
     };
-  }, [enabled, pollInterval, adaptivePolling, status.isLimited, hasActiveJobs]);
+  }, [enabled, pollInterval, adaptivePolling, hasActiveJobs, fetchStatus]);
 
-  const refresh = useCallback(() => {
+  const refresh = useCallback(async () => {
     // Reset error count and paused state on manual refresh
     errorCountRef.current = 0;
     setIsPaused(false);
     isPollingRef.current = true;
-    return fetchStatus();
+    await fetchStatus();
+    if (mountedRef.current && scheduleNextRef.current) {
+      scheduleNextRef.current();
+    }
   }, [fetchStatus]);
 
   return {

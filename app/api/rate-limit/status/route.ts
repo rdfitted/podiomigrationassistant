@@ -25,8 +25,12 @@ export async function GET() {
       });
     }
 
-    const timeUntilReset = tracker.getTimeUntilReset();
-    const percentUsed = Math.round(((state.limit - state.remaining) / state.limit) * 100);
+    const timeUntilReset = Math.max(0, tracker.getTimeUntilReset());
+    const percentUsedRaw =
+      state.limit > 0
+        ? ((state.limit - state.remaining) / state.limit) * 100
+        : 0;
+    const percentUsed = Math.max(0, Math.min(100, Math.round(percentUsedRaw)));
     const isLimited = tracker.shouldPause(10);
 
     return NextResponse.json({
