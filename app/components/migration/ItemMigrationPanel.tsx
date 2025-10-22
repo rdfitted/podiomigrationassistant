@@ -44,6 +44,7 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
   const [concurrency, setConcurrency] = useState<number>(5);
   const [maxItems, setMaxItems] = useState<number | undefined>(undefined);
   const [dryRun, setDryRun] = useState<boolean>(false); // Dry-run mode toggle
+  const [transferFiles, setTransferFiles] = useState<boolean>(false); // File transfer toggle
   const [showFieldMapping, setShowFieldMapping] = useState(false);
   const [showPastMigrations, setShowPastMigrations] = useState(false);
   const [pastMigrations, setPastMigrations] = useState<MigrationListItem[]>([]);
@@ -86,6 +87,13 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
   const actualFailedCount = jobStatus
     ? Math.max(jobStatus.progress?.failed || 0, jobStatus.failedItems?.length || 0)
     : 0;
+
+  // Reset transferFiles when mode changes to 'create'
+  useEffect(() => {
+    if (mode === 'create') {
+      setTransferFiles(false);
+    }
+  }, [mode]);
 
   // Fetch field structures when app IDs change
   useEffect(() => {
@@ -206,6 +214,7 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
       stopOnError: false,
       maxItems,
       dryRun, // Dry-run is now supported for all modes (CREATE, UPDATE, UPSERT)
+      transferFiles: (mode === 'update' || mode === 'upsert') ? transferFiles : undefined, // Only for UPDATE/UPSERT modes
     });
   };
 
@@ -593,6 +602,29 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
               </div>
             </label>
           </div>
+
+          {/* File Transfer - Only for UPDATE and UPSERT modes */}
+          {(mode === 'update' || mode === 'upsert') && (
+            <div className="bg-purple-50 dark:bg-purple-900/10 border border-purple-200 dark:border-purple-800 rounded-md p-4">
+              <label className="flex items-start cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={transferFiles}
+                  onChange={(e) => setTransferFiles(e.target.checked)}
+                  className="mt-0.5 mr-3 h-4 w-4 text-purple-600 rounded border-gray-300 focus:ring-purple-500"
+                  disabled={isCreating}
+                />
+                <div>
+                  <span className="text-sm font-medium text-purple-900 dark:text-purple-100">
+                    📎 Files
+                  </span>
+                  <p className="mt-1 text-xs text-purple-700 dark:text-purple-300">
+                    Transfer all attached files from source items to destination items. Files will be downloaded from source and re-uploaded to the target app.
+                  </p>
+                </div>
+              </label>
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-4">
             <div>
