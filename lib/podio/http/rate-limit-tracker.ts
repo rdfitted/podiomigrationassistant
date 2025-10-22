@@ -41,6 +41,29 @@ export class RateLimitTracker {
    * @param reset - Value from X-Rate-Limit-Reset header (ISO 8601 timestamp)
    */
   updateFromHeaders(limit: number, remaining: number, reset: string): void {
+    // Defensive: Validate inputs before updating state
+    if (typeof limit !== 'number' || !isFinite(limit) || limit < 0) {
+      podioLog('warn', 'Invalid rate limit value received, skipping update', { limit });
+      return;
+    }
+
+    if (typeof remaining !== 'number' || !isFinite(remaining) || remaining < 0) {
+      podioLog('warn', 'Invalid remaining value received, skipping update', { remaining });
+      return;
+    }
+
+    if (typeof reset !== 'string' || !reset) {
+      podioLog('warn', 'Invalid reset timestamp received, skipping update', { reset });
+      return;
+    }
+
+    // Validate reset timestamp is parseable
+    const resetDate = new Date(reset);
+    if (isNaN(resetDate.getTime())) {
+      podioLog('warn', 'Invalid reset timestamp format, skipping update', { reset });
+      return;
+    }
+
     const previousRemaining = this.state?.remaining ?? limit;
 
     this.state = {
@@ -121,11 +144,26 @@ export class RateLimitTracker {
       return 0;
     }
 
-    const resetTime = new Date(this.state.reset).getTime();
-    const now = Date.now();
-    const timeUntilReset = resetTime - now;
+    try {
+      const resetTime = new Date(this.state.reset).getTime();
 
-    return Math.max(0, timeUntilReset);
+      // Defensive: Check if resetTime is valid
+      if (!isFinite(resetTime) || isNaN(resetTime)) {
+        podioLog('warn', 'Invalid reset time, returning 0', { reset: this.state.reset });
+        return 0;
+      }
+
+      const now = Date.now();
+      const timeUntilReset = resetTime - now;
+
+      return Math.max(0, timeUntilReset);
+    } catch (error) {
+      podioLog('error', 'Error calculating time until reset', {
+        error: error instanceof Error ? error.message : String(error),
+        reset: this.state.reset,
+      });
+      return 0;
+    }
   }
 
   /**

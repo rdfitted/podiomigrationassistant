@@ -25,23 +25,38 @@ export async function GET() {
       });
     }
 
+    // Defensive: Ensure all values are safe to serialize
+    const safeLimit = typeof state.limit === 'number' && isFinite(state.limit) ? state.limit : 0;
+    const safeRemaining = typeof state.remaining === 'number' && isFinite(state.remaining) ? state.remaining : 0;
+
     const timeUntilReset = Math.max(0, tracker.getTimeUntilReset());
     const percentUsedRaw =
-      state.limit > 0
-        ? ((state.limit - state.remaining) / state.limit) * 100
+      safeLimit > 0
+        ? ((safeLimit - safeRemaining) / safeLimit) * 100
         : 0;
     const percentUsed = Math.max(0, Math.min(100, Math.round(percentUsedRaw)));
     const isLimited = tracker.shouldPause(10);
 
+    // Defensive: Safely serialize lastUpdated
+    let lastUpdatedStr: string;
+    try {
+      lastUpdatedStr = state.lastUpdated instanceof Date
+        ? state.lastUpdated.toISOString()
+        : new Date().toISOString();
+    } catch (err) {
+      console.warn('Failed to serialize lastUpdated, using current time:', err);
+      lastUpdatedStr = new Date().toISOString();
+    }
+
     return NextResponse.json({
       hasData: true,
-      limit: state.limit,
-      remaining: state.remaining,
+      limit: safeLimit,
+      remaining: safeRemaining,
       resetAt: state.reset,
       isLimited,
       timeUntilReset,
       percentUsed,
-      lastUpdated: state.lastUpdated.toISOString()
+      lastUpdated: lastUpdatedStr
     }, {
       headers: { 'Cache-Control': 'no-store' }
     });
