@@ -77,28 +77,30 @@ export async function createCleanupJob(
     dryRun: request.dryRun,
   });
 
-  // Validate match field type
-  if (request.matchField) {
-    logger.info('Validating match field type', {
-      matchField: request.matchField,
-    });
-
-    const app = await getAppStructureDetailed(request.appId);
-    const matchField = app.fields?.find(f => f.external_id === request.matchField);
-
-    if (!matchField) {
-      throw new Error(
-        `Match field not found: "${request.matchField}" does not exist in app ${request.appId}`
-      );
-    }
-
-    // Validate field type is suitable for matching
-    validateMatchFieldType(matchField.type, matchField.label);
-
-    logger.info('Match field validation passed', {
-      matchField: { external_id: matchField.external_id, label: matchField.label, type: matchField.type },
-    });
+  // Validate match field type (required)
+  if (!request.matchField) {
+    throw new CleanupValidationError('matchField is required for cleanup jobs');
   }
+
+  logger.info('Validating match field type', {
+    matchField: request.matchField,
+  });
+
+  const app = await getAppStructureDetailed(request.appId);
+  const matchField = app.fields?.find(f => f.external_id === request.matchField);
+
+  if (!matchField) {
+    throw new CleanupValidationError(
+      `Match field not found: "${request.matchField}" does not exist in app ${request.appId}`
+    );
+  }
+
+  // Validate field type is suitable for matching
+  validateMatchFieldType(matchField.type, matchField.label);
+
+  logger.info('Match field validation passed', {
+    matchField: { external_id: matchField.external_id, label: matchField.label, type: matchField.type },
+  });
 
   // Create cleanup job in state store
   const job = await migrationStateStore.createMigrationJob(
@@ -195,12 +197,15 @@ export async function detectDuplicateGroups(
     }
 
     // Extract the actual value from the field
-    let matchValue: any;
-    if (Array.isArray(fieldValue.values) && fieldValue.values.length > 0) {
-      matchValue = fieldValue.values[0].value;
-    } else {
-      matchValue = fieldValue.value;
-    }
+    let raw = Array.isArray(fieldValue.values) && fieldValue.values.length > 0
+      ? fieldValue.values[0]?.value
+      : fieldValue.value;
+
+    // Unwrap nested objects (e.g., {text: ...}, {value: ...})
+    const matchValue =
+      typeof raw === 'object' && raw !== null
+        ? (raw.text ?? raw.value ?? String(raw))
+        : raw;
 
     // Normalize the match value
     const normalizedValue = normalizeForMatch(matchValue);
@@ -233,14 +238,21 @@ export async function detectDuplicateGroups(
 
   // Filter to only groups with duplicates (more than 1 item)
   const duplicateGroups: DuplicateGroup[] = [];
-  for (const [matchValue, items] of groups) {
-    if (items.length > 1) {
-      // Sort by creation date (oldest first)
-      items.sort((a, b) => new Date(a.createdOn).getTime() - new Date(b.createdOn).getTime());
+  for (const [matchValue, groupItems] of groups) {
+    if (groupItems.length > 1) {
+      // Sort by creation date (oldest first), with fallback for invalid dates
+      groupItems.sort((a, b) => {
+        const ta = new Date(a.createdOn).getTime();
+        const tb = new Date(b.createdOn).getTime();
+        if (Number.isNaN(ta) && Number.isNaN(tb)) return a.itemId - b.itemId;
+        if (Number.isNaN(ta)) return 1;
+        if (Number.isNaN(tb)) return -1;
+        return ta - tb;
+      });
 
       duplicateGroups.push({
         matchValue,
-        items,
+        items: groupItems,
       });
     }
   }
