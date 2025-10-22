@@ -890,6 +890,24 @@ export async function bulkUpdateItems(
     const batchPromises = batch.map((update, batchIndex) => {
       const globalIndex = i + batchIndex;
 
+      // Skip API call if no fields are provided (e.g., file-only transfer)
+      // but still mark as successful so file transfer can proceed
+      const hasFields = Object.keys(update.fields).length > 0;
+
+      if (!hasFields) {
+        logger.debug('Skipping field update (no fields selected)', {
+          itemId: update.itemId,
+          index: globalIndex,
+        });
+
+        result.successful.push({
+          itemId: update.itemId,
+          revision: 0, // No actual update occurred
+        });
+        result.successCount++;
+        return Promise.resolve({ success: true, response: null, index: globalIndex });
+      }
+
       return withRetry(
         () => updateItem(client, update.itemId, update.fields, { hook, silent }),
         createRetryConfig(retryConfig || { maxAttempts: 3 }),
