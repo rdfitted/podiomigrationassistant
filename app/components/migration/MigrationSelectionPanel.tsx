@@ -156,55 +156,58 @@ export function MigrationSelectionPanel({ onSelectionChange }: MigrationSelectio
           </div>
         )}
 
-        {/* Source column */}
-        <div className="mb-8">
-          <SelectionColumn
-            title="Source"
-            selection={source}
-            organizations={organizations}
-            organizationsLoading={organizationsLoading}
-            organizationsError={organizationsError}
-            onOrganizationChange={setSourceOrg}
-            spaces={sourceSpaces}
-            spacesLoading={sourceSpacesLoading}
-            spacesError={sourceSpacesError}
-            onSpaceChange={setSourceSpace}
-            apps={sourceApps}
-            appsLoading={sourceAppsLoading}
-            appsError={sourceAppsError}
-            onAppChange={setSourceApp}
-            onRetry={refresh}
-          />
-        </div>
+        {/* Horizontal layout for source and destination */}
+        <div className="flex gap-6 mb-8">
+          {/* Source column */}
+          <div className="flex-1">
+            <SelectionColumn
+              title="Source"
+              selection={source}
+              organizations={organizations}
+              organizationsLoading={organizationsLoading}
+              organizationsError={organizationsError}
+              onOrganizationChange={setSourceOrg}
+              spaces={sourceSpaces}
+              spacesLoading={sourceSpacesLoading}
+              spacesError={sourceSpacesError}
+              onSpaceChange={setSourceSpace}
+              apps={sourceApps}
+              appsLoading={sourceAppsLoading}
+              appsError={sourceAppsError}
+              onAppChange={setSourceApp}
+              onRetry={refresh}
+            />
+          </div>
 
-        {/* Divider */}
-        <div className="flex items-center my-8">
-          <div className="flex-1 border-t border-gray-300 dark:border-gray-700"></div>
-          <svg className="w-6 h-6 mx-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-          </svg>
-          <div className="flex-1 border-t border-gray-300 dark:border-gray-700"></div>
-        </div>
+          {/* Vertical divider */}
+          <div className="flex flex-col items-center justify-center py-8">
+            <div className="flex-1 border-l border-gray-300 dark:border-gray-700"></div>
+            <svg className="w-6 h-6 my-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+            </svg>
+            <div className="flex-1 border-l border-gray-300 dark:border-gray-700"></div>
+          </div>
 
-        {/* Destination column */}
-        <div className="mb-8">
-          <SelectionColumn
-            title="Destination"
-            selection={destination}
-            organizations={organizations}
-            organizationsLoading={organizationsLoading}
-            organizationsError={organizationsError}
-            onOrganizationChange={setDestinationOrg}
-            spaces={destinationSpaces}
-            spacesLoading={destinationSpacesLoading}
-            spacesError={destinationSpacesError}
-            onSpaceChange={setDestinationSpace}
-            apps={destinationApps}
-            appsLoading={destinationAppsLoading}
-            appsError={destinationAppsError}
-            onAppChange={setDestinationApp}
-            onRetry={refresh}
-          />
+          {/* Destination column */}
+          <div className="flex-1">
+            <SelectionColumn
+              title="Destination"
+              selection={destination}
+              organizations={organizations}
+              organizationsLoading={organizationsLoading}
+              organizationsError={organizationsError}
+              onOrganizationChange={setDestinationOrg}
+              spaces={destinationSpaces}
+              spacesLoading={destinationSpacesLoading}
+              spacesError={destinationSpacesError}
+              onSpaceChange={setDestinationSpace}
+              apps={destinationApps}
+              appsLoading={destinationAppsLoading}
+              appsError={destinationAppsError}
+              onAppChange={setDestinationApp}
+              onRetry={refresh}
+            />
+          </div>
         </div>
 
         {/* Status indicator */}
