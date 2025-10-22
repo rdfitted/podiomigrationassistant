@@ -65,6 +65,7 @@ export class CleanupExecutor extends EventEmitter {
   private client: PodioHttpClient;
   private config: CleanupExecutorConfig;
   private jobId: string;
+  private pauseRequested: boolean = false;
 
   constructor(
     client: PodioHttpClient,
@@ -75,6 +76,24 @@ export class CleanupExecutor extends EventEmitter {
     this.client = client;
     this.jobId = jobId;
     this.config = config;
+  }
+
+  /**
+   * Request pause of cleanup execution
+   */
+  requestPause(): void {
+    this.pauseRequested = true;
+    logger.info('Pause requested for cleanup job', { jobId: this.jobId });
+  }
+
+  /**
+   * Check if pause was requested
+   */
+  private checkPause(): void {
+    if (this.pauseRequested) {
+      logger.info('Pause detected - stopping cleanup execution', { jobId: this.jobId });
+      throw new Error('PAUSE_REQUESTED');
+    }
   }
 
   /**
@@ -98,7 +117,11 @@ export class CleanupExecutor extends EventEmitter {
       const duplicateGroups = await detectDuplicateGroups(
         this.client,
         this.config.appId,
-        this.config.matchField
+        this.config.matchField,
+        {
+          jobId: this.jobId,
+          onPauseCheck: () => this.pauseRequested,
+        }
       );
 
       // Apply max groups limit if specified
@@ -215,9 +238,29 @@ export class CleanupExecutor extends EventEmitter {
       return result;
 
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+
+      // Handle pause request gracefully
+      if (errorMessage === 'PAUSE_REQUESTED') {
+        logger.info('Cleanup execution paused by user request', {
+          jobId: this.jobId,
+        });
+
+        await migrationStateStore.updateJobStatus(this.jobId, 'paused');
+
+        // Don't emit error for pause requests - this is expected behavior
+        return {
+          jobId: this.jobId,
+          totalGroups: 0,
+          totalItemsDeleted: 0,
+          failedDeletions: 0,
+          errors: [],
+        };
+      }
+
       logger.error('Cleanup execution failed', {
         jobId: this.jobId,
-        error: error instanceof Error ? error.message : String(error),
+        error: errorMessage,
       });
 
       await migrationStateStore.updateJobStatus(this.jobId, 'failed');
@@ -249,6 +292,9 @@ export class CleanupExecutor extends EventEmitter {
     // Process deletions in batches
     const batchSize = this.config.batchSize;
     for (let i = 0; i < allItemsToDelete.length; i += batchSize) {
+      // Check for pause request before each batch
+      this.checkPause();
+
       const batch = allItemsToDelete.slice(i, i + batchSize);
 
       try {
@@ -328,6 +374,47 @@ export class CleanupExecutor extends EventEmitter {
 }
 
 /**
+ * Global registry of active cleanup executors for pause support
+ */
+class CleanupExecutorRegistry {
+  private executors: Map<string, CleanupExecutor> = new Map();
+
+  register(jobId: string, executor: CleanupExecutor): void {
+    this.executors.set(jobId, executor);
+    logger.debug('Registered cleanup executor', { jobId, total: this.executors.size });
+  }
+
+  unregister(jobId: string): void {
+    this.executors.delete(jobId);
+    logger.debug('Unregistered cleanup executor', { jobId, remaining: this.executors.size });
+  }
+
+  get(jobId: string): CleanupExecutor | undefined {
+    return this.executors.get(jobId);
+  }
+
+  requestPause(jobId: string): boolean {
+    const executor = this.executors.get(jobId);
+    if (executor) {
+      executor.requestPause();
+      return true;
+    }
+    return false;
+  }
+}
+
+// Global registry instance
+const cleanupExecutorRegistry = new CleanupExecutorRegistry();
+
+/**
+ * Request pause for a cleanup job
+ * Returns true if executor was found and pause requested, false otherwise
+ */
+export function requestCleanupPause(jobId: string): boolean {
+  return cleanupExecutorRegistry.requestPause(jobId);
+}
+
+/**
  * Execute cleanup job
  */
 export async function executeCleanup(
@@ -351,16 +438,24 @@ export async function executeCleanup(
     approvedGroups: request.approvedGroups,
   });
 
-  // Forward events to state store
-  executor.on('progress', async (stats) => {
-    await migrationStateStore.updateJobProgress(jobId, {
-      total: stats.totalGroups,
-      processed: stats.processedGroups,
-      successful: stats.deletedItems,
-      failed: stats.failedDeletions,
-      percent: stats.percent,
-    });
-  });
+  // Register executor for pause support
+  cleanupExecutorRegistry.register(jobId, executor);
 
-  return executor.execute();
+  try {
+    // Forward events to state store
+    executor.on('progress', async (stats) => {
+      await migrationStateStore.updateJobProgress(jobId, {
+        total: stats.totalGroups,
+        processed: stats.processedGroups,
+        successful: stats.deletedItems,
+        failed: stats.failedDeletions,
+        percent: stats.percent,
+      });
+    });
+
+    return await executor.execute();
+  } finally {
+    // Always unregister executor when done
+    cleanupExecutorRegistry.unregister(jobId);
+  }
 }

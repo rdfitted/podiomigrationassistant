@@ -182,11 +182,16 @@ export async function getCleanupJobStatus(jobId: string): Promise<CleanupStatusR
 export async function detectDuplicateGroups(
   client: PodioHttpClient,
   appId: number,
-  matchField: string
+  matchField: string,
+  options?: {
+    jobId?: string;
+    onPauseCheck?: () => boolean;
+  }
 ): Promise<DuplicateGroup[]> {
   logger.info('Detecting duplicate groups with streaming', {
     appId,
     matchField,
+    jobId: options?.jobId,
   });
 
   const startTime = Date.now();
@@ -204,6 +209,16 @@ export async function detectDuplicateGroups(
   for await (const batch of streamItems(client, appId, {
     batchSize: 500,
   })) {
+    // Check for pause request before processing batch
+    if (options?.onPauseCheck && options.onPauseCheck()) {
+      logger.info('Pause requested during duplicate detection streaming', {
+        appId,
+        itemsProcessed,
+        jobId: options.jobId,
+      });
+      throw new Error('PAUSE_REQUESTED');
+    }
+
     for (const item of batch) {
       itemsProcessed++;
 
