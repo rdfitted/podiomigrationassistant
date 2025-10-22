@@ -215,6 +215,8 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
       maxItems,
       dryRun, // Dry-run is now supported for all modes (CREATE, UPDATE, UPSERT)
       transferFiles: (mode === 'update' || mode === 'upsert') ? transferFiles : undefined, // Only for UPDATE/UPSERT modes
+      // If transferring files without custom field mapping, explicitly pass empty mapping to prevent auto-mapping
+      fieldMapping: (!isUsingCustomMapping && transferFiles && (mode === 'update' || mode === 'upsert')) ? {} : undefined,
     });
   };
 
@@ -376,9 +378,18 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
                   </span>
                 )}
                 {!isUsingCustomMapping && currentMapping && (
-                  <span className="text-xs bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 px-2 py-0.5 rounded">
-                    Auto
-                  </span>
+                  <>
+                    {/* Show "Files-only" chip when transferring files without field updates */}
+                    {transferFiles && (mode === 'update' || mode === 'upsert') ? (
+                      <span className="text-xs bg-purple-100 dark:bg-purple-900 text-purple-800 dark:text-purple-200 px-2 py-0.5 rounded">
+                        Files-only
+                      </span>
+                    ) : (
+                      <span className="text-xs bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 px-2 py-0.5 rounded">
+                        Auto
+                      </span>
+                    )}
+                  </>
                 )}
               </div>
               <svg
@@ -634,6 +645,12 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
                     ? 'File transfer is only available for UPDATE and UPSERT modes where items already exist in the destination.'
                     : 'Transfer all attached files from source items to destination items. Files will be downloaded from source and re-uploaded to the target app.'}
                 </p>
+                {/* Show note when in files-only mode (no custom mapping + files enabled) */}
+                {transferFiles && !isUsingCustomMapping && (mode === 'update' || mode === 'upsert') && (
+                  <div className="mt-2 p-2 bg-purple-100 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded text-xs text-purple-800 dark:text-purple-200">
+                    ℹ️ <strong>Files-only mode:</strong> Only files will be transferred. Item fields will not be updated. To update fields, configure custom field mapping above.
+                  </div>
+                )}
               </div>
             </label>
           </div>
