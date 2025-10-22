@@ -197,6 +197,10 @@ export async function detectDuplicateGroups(
   const groups = new Map<string, DuplicateItem[]>();
   const { streamItems } = await import('../../podio/resources/items');
 
+  // Debug tracking
+  const debugSamples: Array<{ itemId: number; raw: any; matchValue: any; normalized: string }> = [];
+  const emptyFieldCount = { noField: 0, emptyValue: 0 };
+
   for await (const batch of streamItems(client, appId, {
     batchSize: 500,
   })) {
@@ -207,6 +211,7 @@ export async function detectDuplicateGroups(
       const fieldValue = item.fields?.find((f: any) => f.external_id === matchField);
       if (!fieldValue) {
         itemsSkipped++;
+        emptyFieldCount.noField++;
         continue;
       }
 
@@ -224,9 +229,20 @@ export async function detectDuplicateGroups(
       // Normalize the match value using consistent logic
       const normalizedValue = normalizeForMatch(matchValue);
 
+      // Debug: Capture first 10 samples for logging
+      if (debugSamples.length < 10) {
+        debugSamples.push({
+          itemId: item.item_id,
+          raw,
+          matchValue,
+          normalized: normalizedValue,
+        });
+      }
+
       // Skip empty values (null, undefined, empty string)
       if (!normalizedValue) {
         itemsSkipped++;
+        emptyFieldCount.emptyValue++;
         continue;
       }
 
@@ -248,7 +264,23 @@ export async function detectDuplicateGroups(
     }
   }
 
+  // Log debug info
+  logger.info('Field extraction debug samples', {
+    samples: debugSamples,
+    emptyFieldCount,
+  });
+
   const duration = Date.now() - startTime;
+
+  // Calculate normalization impact statistics
+  const normalizationStats = {
+    totalProcessed: itemsProcessed,
+    totalSkipped: itemsSkipped,
+    skippedNoField: emptyFieldCount.noField,
+    skippedEmptyValue: emptyFieldCount.emptyValue,
+    uniqueNormalized: groups.size,
+    potentialDuplicates: itemsProcessed - itemsSkipped - groups.size,
+  };
 
   // Log statistics
   logger.info('Duplicate detection complete', {
@@ -258,6 +290,8 @@ export async function detectDuplicateGroups(
     durationMs: duration,
     itemsPerSecond: Math.round((itemsProcessed / duration) * 1000),
   });
+
+  logger.info('Normalization impact', normalizationStats);
 
   // Filter to only groups with duplicates (more than 1 item)
   const duplicateGroups: DuplicateGroup[] = [];
@@ -280,11 +314,27 @@ export async function detectDuplicateGroups(
     }
   }
 
+  // Log top duplicate groups for debugging
+  const topGroups = duplicateGroups
+    .sort((a, b) => b.items.length - a.items.length)
+    .slice(0, 5)
+    .map(g => ({
+      matchValue: g.matchValue,
+      itemCount: g.items.length,
+      sampleItems: g.items.slice(0, 3).map(i => ({
+        itemId: i.itemId,
+        title: i.title,
+        matchValue: i.matchValue,
+      })),
+    }));
+
   logger.info('Duplicate detection complete', {
     totalGroups: groups.size,
     duplicateGroups: duplicateGroups.length,
     totalDuplicateItems: duplicateGroups.reduce((sum, g) => sum + g.items.length, 0),
   });
+
+  logger.info('Top 5 duplicate groups by size', { topGroups });
 
   return duplicateGroups;
 }

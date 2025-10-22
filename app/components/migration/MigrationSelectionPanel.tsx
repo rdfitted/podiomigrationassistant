@@ -44,6 +44,13 @@ export function MigrationSelectionPanel({ onSelectionChange }: MigrationSelectio
   const [flowsCount, setFlowsCount] = useState<number | undefined>(undefined);
   const [itemsCount, setItemsCount] = useState<number | undefined>(undefined);
 
+  // Track mount status to prevent hydration mismatch with localStorage-based active jobs
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   // Update context when tab changes
   const handleTabChange = (tab: MigrationTabType) => {
     setActiveTab(tab);
@@ -279,7 +286,7 @@ export function MigrationSelectionPanel({ onSelectionChange }: MigrationSelectio
               id: 'flows',
               label: 'Flow Migration',
               badge: flowsCount,
-              icon: getActiveJob('flow_clone') ? (
+              icon: mounted && getActiveJob('flow_clone') ? (
                 <span className="relative flex h-2 w-2">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
                   <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
@@ -290,7 +297,7 @@ export function MigrationSelectionPanel({ onSelectionChange }: MigrationSelectio
               id: 'items',
               label: 'Item Migration',
               badge: itemsCount,
-              icon: getActiveJob('item_migration') ? (
+              icon: mounted && getActiveJob('item_migration') ? (
                 <span className="relative flex h-2 w-2">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
                   <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
@@ -300,7 +307,7 @@ export function MigrationSelectionPanel({ onSelectionChange }: MigrationSelectio
             {
               id: 'cleanup',
               label: 'Duplicate Cleanup',
-              icon: getActiveJob('cleanup') ? (
+              icon: mounted && getActiveJob('cleanup') ? (
                 <span className="relative flex h-2 w-2">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
                   <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>

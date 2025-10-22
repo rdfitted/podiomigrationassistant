@@ -7,7 +7,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { executeCleanup } from '@/lib/migration/cleanup/executor';
 import { DuplicateGroup } from '@/lib/migration/cleanup/types';
 import { loadPodioConfig } from '@/lib/podio/config';
-import { createPodioHttpClient } from '@/lib/podio/http/client';
+import { getPodioHttpClient } from '@/lib/podio/http/client';
 import { migrationStateStore } from '@/lib/migration/state-store';
 
 export const runtime = 'nodejs';
@@ -88,8 +88,7 @@ export async function POST(
       );
     }
 
-    const config = loadPodioConfig();
-    const client = createPodioHttpClient(config);
+    const client = getPodioHttpClient();
 
     // Build request payload from job metadata and approved groups
     const jobMetadata = job.metadata as any;
