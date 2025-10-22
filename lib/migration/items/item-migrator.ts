@@ -71,6 +71,8 @@ export interface MigrationConfig {
   retryItemIds?: number[];
   /** Dry-run mode: preview changes without executing (CREATE, UPDATE, UPSERT) */
   dryRun?: boolean;
+  /** Whether to transfer files from source to destination (UPDATE/UPSERT modes only, default: false) */
+  transferFiles?: boolean;
   /** Progress callback */
   onProgress?: (progress: { total: number; processed: number; successful: number; failed: number }) => void | Promise<void>;
 }
@@ -588,6 +590,7 @@ export class ItemMigrator {
       targetAppId: config.targetAppId,
       mode: config.mode,
       dryRun: config.dryRun,
+      transferFiles: config.transferFiles,
     });
 
     // Dry-run mode is now supported for all operations (CREATE, UPDATE, UPSERT)
@@ -672,6 +675,7 @@ export class ItemMigrator {
           concurrency: config.concurrency || 5,
           maxRetries: 3,
           stopOnError: config.stopOnError || false,
+          transferFiles: config.transferFiles || false,
         }
       );
 

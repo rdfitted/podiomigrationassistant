@@ -32,6 +32,8 @@ export interface BatchProcessorConfig {
   stopOnError: boolean;
   /** Whether to suppress notifications for creates/updates (default: true) */
   silent?: boolean;
+  /** Whether to transfer files during updates (default: false) */
+  transferFiles?: boolean;
 }
 
 /**
@@ -406,6 +408,46 @@ export class ItemBatchProcessor extends EventEmitter {
             silent: this.config.silent,
           }
         );
+
+        // If file transfer is enabled, transfer files from source to target
+        if (this.config.transferFiles) {
+          migrationLogger.info('Transferring files for updated items', {
+            batchNumber: batchNum + 1,
+            itemCount: batch.length,
+          });
+
+          // Import file transfer function
+          const { transferItemFiles } = await import('../../podio/resources/files');
+
+          // Transfer files for each successfully updated item
+          for (let i = 0; i < batch.length; i++) {
+            const update = batch[i];
+
+            // Only transfer if we have a source item ID
+            if (update.sourceItemId) {
+              try {
+                const transferredFileIds = await transferItemFiles(
+                  this.client,
+                  update.sourceItemId,
+                  update.itemId
+                );
+
+                migrationLogger.info('Files transferred for item', {
+                  sourceItemId: update.sourceItemId,
+                  targetItemId: update.itemId,
+                  fileCount: transferredFileIds.length,
+                });
+              } catch (error) {
+                migrationLogger.warn('Failed to transfer files for item', {
+                  sourceItemId: update.sourceItemId,
+                  targetItemId: update.itemId,
+                  error: error instanceof Error ? error.message : String(error),
+                });
+                // Don't fail the update if file transfer fails
+              }
+            }
+          }
+        }
 
         // Update stats
         this.stats.successful += batchResult.successCount;
