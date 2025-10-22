@@ -63,13 +63,6 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
     failedCreates: number;
   } | null>(null);
 
-  // Reset dry-run when switching to CREATE mode to avoid sending unsupported flag
-  useEffect(() => {
-    if (mode === 'create' && dryRun) {
-      setDryRun(false);
-    }
-  }, [mode, dryRun]);
-
   const {
     jobId,
     jobStatus,
@@ -161,8 +154,9 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
     setValidationError(null);
     setValidationProgress(null);
 
-    // Only validate for CREATE mode
-    if (mode === 'create') {
+    // Only validate for CREATE mode when not in dry-run
+    // (validation creates/deletes test items, which violates dry-run contract)
+    if (mode === 'create' && !dryRun) {
       setIsValidating(true);
 
       try {
@@ -211,7 +205,7 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
       concurrency,
       stopOnError: false,
       maxItems,
-      dryRun: mode !== 'create' ? dryRun : undefined, // Only pass dry-run for UPDATE/UPSERT
+      dryRun, // Dry-run is now supported for all modes (CREATE, UPDATE, UPSERT)
     });
   };
 
@@ -575,29 +569,30 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
             </p>
           </div>
 
-          {/* Dry-Run Mode - Show for UPDATE and UPSERT modes */}
-          {(mode === 'update' || mode === 'upsert') && (
-            <div className="bg-blue-50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-800 rounded-md p-4">
-              <label className="flex items-start cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={dryRun}
-                  onChange={(e) => setDryRun(e.target.checked)}
-                  className="mt-0.5 mr-3 h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
-                  disabled={isCreating}
-                />
-                <div>
-                  <span className="text-sm font-medium text-blue-900 dark:text-blue-100">
-                    🔍 Dry-Run Mode (Preview Changes)
-                  </span>
-                  <p className="mt-1 text-xs text-blue-700 dark:text-blue-300">
-                    Preview exactly what would {mode === 'update' ? 'be updated' : 'be updated or created'} without executing any changes.
-                    See field-by-field changes, identify missing matches, and skip items with no changes.
-                  </p>
-                </div>
-              </label>
-            </div>
-          )}
+          {/* Dry-Run Mode - Show for all modes */}
+          <div className="bg-blue-50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-800 rounded-md p-4">
+            <label className="flex items-start cursor-pointer">
+              <input
+                type="checkbox"
+                checked={dryRun}
+                onChange={(e) => setDryRun(e.target.checked)}
+                className="mt-0.5 mr-3 h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+                disabled={isCreating}
+              />
+              <div>
+                <span className="text-sm font-medium text-blue-900 dark:text-blue-100">
+                  🔍 Dry-Run Mode (Preview Changes)
+                </span>
+                <p className="mt-1 text-xs text-blue-700 dark:text-blue-300">
+                  {mode === 'create'
+                    ? 'Preview exactly what items would be created without executing any changes. See field values, identify duplicates, and skip items with missing fields.'
+                    : mode === 'update'
+                    ? 'Preview exactly what would be updated without executing any changes. See field-by-field changes, identify missing matches, and skip items with no changes.'
+                    : 'Preview exactly what would be updated or created without executing any changes. See field-by-field changes, identify missing matches, and skip items with no changes.'}
+                </p>
+              </div>
+            </label>
+          </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div>
