@@ -5,6 +5,7 @@ import { useMigrationSelection, MigrationSelectionState } from '@/app/hooks/useM
 import { SelectionColumn } from './SelectionColumn';
 import { FlowClonePanel } from './FlowClonePanel';
 import { ItemMigrationPanel } from './ItemMigrationPanel';
+import { CleanupPanel } from './CleanupPanel';
 import { TabContainer, MigrationTabType } from './TabContainer';
 
 export interface MigrationSelectionPanelProps {
@@ -240,6 +241,7 @@ export function MigrationSelectionPanel({ onSelectionChange }: MigrationSelectio
           tabs={[
             { id: 'flows', label: 'Flow Migration', badge: flowsCount },
             { id: 'items', label: 'Item Migration', badge: itemsCount },
+            { id: 'cleanup', label: 'Duplicate Cleanup' },
           ]}
         >
           {activeTab === 'flows' && (
@@ -252,6 +254,11 @@ export function MigrationSelectionPanel({ onSelectionChange }: MigrationSelectio
             <ItemMigrationPanel
               sourceAppId={source.appId}
               targetAppId={destination.appId}
+            />
+          )}
+          {activeTab === 'cleanup' && (
+            <CleanupPanel
+              appId={source.appId}
             />
           )}
         </TabContainer>

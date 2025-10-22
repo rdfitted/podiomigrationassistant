@@ -6,12 +6,12 @@ import { logger } from './logging';
 /**
  * Migration job status types
  */
-export type MigrationJobStatus = 'planning' | 'in_progress' | 'completed' | 'failed' | 'paused' | 'cancelled';
+export type MigrationJobStatus = 'planning' | 'in_progress' | 'completed' | 'failed' | 'paused' | 'cancelled' | 'detecting' | 'waiting_approval' | 'deleting';
 
 /**
  * Migration job types
  */
-export type MigrationJobType = 'flow_clone' | 'item_migration';
+export type MigrationJobType = 'flow_clone' | 'item_migration' | 'cleanup';
 
 /**
  * Migration step types

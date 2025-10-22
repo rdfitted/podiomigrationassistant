@@ -2,7 +2,7 @@
 
 import React from 'react';
 
-export type MigrationTabType = 'flows' | 'items';
+export type MigrationTabType = 'flows' | 'items' | 'cleanup';
 
 export interface Tab {
   id: MigrationTabType;

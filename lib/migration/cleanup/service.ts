@@ -1,0 +1,282 @@
+/**
+ * Duplicate cleanup service layer
+ * Provides business logic for detecting and cleaning up duplicate items
+ */
+
+import { migrationStateStore } from '../state-store';
+import { CleanupRequestPayload, CleanupStatusResponse, CleanupResult, DuplicateGroup, DuplicateItem } from './types';
+import { getAppStructureDetailed } from '../../podio/migration';
+import { logger } from '../logging';
+import { normalizeForMatch } from '../items/prefetch-cache';
+
+/**
+ * Field types that are valid for matching
+ */
+const VALID_MATCH_FIELD_TYPES = [
+  'text',
+  'number',
+  'calculation',
+  'email',
+  'phone',
+  'tel',
+  'duration',
+  'money',
+  'location',
+  'question',
+];
+
+/**
+ * Field types that should NOT be used for matching
+ */
+const INVALID_MATCH_FIELD_TYPES = [
+  'app',
+  'category',
+  'contact',
+  'date',
+  'image',
+  'file',
+  'embed',
+  'created_on',
+  'created_by',
+  'created_via',
+];
+
+/**
+ * Validate that a field type is suitable for matching
+ */
+function validateMatchFieldType(fieldType: string, fieldLabel: string): void {
+  if (INVALID_MATCH_FIELD_TYPES.includes(fieldType)) {
+    throw new Error(
+      `Invalid match field type: "${fieldLabel}" is a ${fieldType} field. ` +
+      `${fieldType.charAt(0).toUpperCase() + fieldType.slice(1)} fields cannot be used for matching because ` +
+      `they contain IDs or complex objects that aren't portable. ` +
+      `Valid match field types: ${VALID_MATCH_FIELD_TYPES.join(', ')}`
+    );
+  }
+
+  if (!VALID_MATCH_FIELD_TYPES.includes(fieldType)) {
+    logger.debug(`Uncommon match field type: ${fieldType}`, {
+      fieldLabel,
+      fieldType,
+    });
+  }
+}
+
+/**
+ * Create a new cleanup job
+ */
+export async function createCleanupJob(
+  request: CleanupRequestPayload
+): Promise<{ jobId: string }> {
+  logger.info('Creating cleanup job', {
+    appId: request.appId,
+    matchField: request.matchField,
+    mode: request.mode,
+    keepStrategy: request.keepStrategy || 'oldest',
+    dryRun: request.dryRun,
+  });
+
+  // Validate match field type
+  if (request.matchField) {
+    logger.info('Validating match field type', {
+      matchField: request.matchField,
+    });
+
+    const app = await getAppStructureDetailed(request.appId);
+    const matchField = app.fields?.find(f => f.external_id === request.matchField);
+
+    if (!matchField) {
+      throw new Error(
+        `Match field not found: "${request.matchField}" does not exist in app ${request.appId}`
+      );
+    }
+
+    // Validate field type is suitable for matching
+    validateMatchFieldType(matchField.type, matchField.label);
+
+    logger.info('Match field validation passed', {
+      matchField: { external_id: matchField.external_id, label: matchField.label, type: matchField.type },
+    });
+  }
+
+  // Create cleanup job in state store
+  const job = await migrationStateStore.createMigrationJob(
+    String(request.appId), // Using appId as spaceId
+    String(request.appId), // Same app for cleanup
+    {
+      jobType: 'cleanup',
+      appId: request.appId,
+      matchField: request.matchField,
+      mode: request.mode,
+      keepStrategy: request.keepStrategy || 'oldest',
+      batchSize: request.batchSize || 100,
+      concurrency: request.concurrency || 3,
+    }
+  );
+
+  logger.info('Cleanup job created', {
+    jobId: job.id,
+    appId: request.appId,
+  });
+
+  return { jobId: job.id };
+}
+
+/**
+ * Get cleanup job status
+ */
+export async function getCleanupJobStatus(jobId: string): Promise<CleanupStatusResponse> {
+  const job = await migrationStateStore.getMigrationJob(jobId);
+
+  if (!job) {
+    throw new Error(`Cleanup job not found: ${jobId}`);
+  }
+
+  if (job.jobType !== 'cleanup') {
+    throw new Error(`Job ${jobId} is not a cleanup job`);
+  }
+
+  const progress = await migrationStateStore.getJobProgress(jobId);
+
+  return {
+    jobId: job.id,
+    status: job.status as any,
+    mode: (job as any).mode,
+    keepStrategy: (job as any).keepStrategy,
+    progress: {
+      totalGroups: progress?.total || 0,
+      processedGroups: progress?.processed || 0,
+      totalItemsToDelete: (progress as any)?.totalItemsToDelete || 0,
+      deletedItems: progress?.successful || 0,
+      failedDeletions: progress?.failed || 0,
+      percent: progress?.percent || 0,
+      lastUpdate: progress?.lastUpdate?.toISOString() || new Date().toISOString(),
+    },
+    duplicateGroups: (job as any).duplicateGroups,
+    errors: job.errors?.map(err => ({
+      itemId: err.itemId ? Number(err.itemId) : undefined,
+      message: err.message,
+      code: err.code,
+      timestamp: err.timestamp.toISOString(),
+    })) || [],
+    startedAt: job.startedAt.toISOString(),
+    completedAt: job.completedAt?.toISOString(),
+  };
+}
+
+/**
+ * Detect duplicate groups in an app
+ * Groups items by match field value and returns groups with duplicates
+ */
+export async function detectDuplicateGroups(
+  appId: number,
+  matchField: string,
+  items: any[]
+): Promise<DuplicateGroup[]> {
+  logger.info('Detecting duplicate groups', {
+    appId,
+    matchField,
+    itemCount: items.length,
+  });
+
+  // Group items by normalized match value
+  const groups = new Map<string, DuplicateItem[]>();
+
+  for (const item of items) {
+    // Extract match field value
+    const fieldValue = item.fields?.find((f: any) => f.external_id === matchField);
+    if (!fieldValue) {
+      logger.debug('Item missing match field, skipping', {
+        itemId: item.item_id,
+        matchField,
+      });
+      continue;
+    }
+
+    // Extract the actual value from the field
+    let matchValue: any;
+    if (Array.isArray(fieldValue.values) && fieldValue.values.length > 0) {
+      matchValue = fieldValue.values[0].value;
+    } else {
+      matchValue = fieldValue.value;
+    }
+
+    // Normalize the match value
+    const normalizedValue = normalizeForMatch(matchValue);
+
+    // Skip empty values (null, undefined, empty string)
+    if (!normalizedValue) {
+      logger.debug('Item has empty match value, skipping', {
+        itemId: item.item_id,
+        matchField,
+      });
+      continue;
+    }
+
+    // Add to group
+    if (!groups.has(normalizedValue)) {
+      groups.set(normalizedValue, []);
+    }
+
+    const duplicateItem: DuplicateItem = {
+      itemId: item.item_id,
+      title: item.title || `Item ${item.item_id}`,
+      createdOn: item.created_on,
+      lastEditOn: item.last_event_on || item.created_on,
+      matchValue: String(matchValue),
+      fieldValues: {}, // Can add preview fields here if needed
+    };
+
+    groups.get(normalizedValue)!.push(duplicateItem);
+  }
+
+  // Filter to only groups with duplicates (more than 1 item)
+  const duplicateGroups: DuplicateGroup[] = [];
+  for (const [matchValue, items] of groups) {
+    if (items.length > 1) {
+      // Sort by creation date (oldest first)
+      items.sort((a, b) => new Date(a.createdOn).getTime() - new Date(b.createdOn).getTime());
+
+      duplicateGroups.push({
+        matchValue,
+        items,
+      });
+    }
+  }
+
+  logger.info('Duplicate detection complete', {
+    totalGroups: groups.size,
+    duplicateGroups: duplicateGroups.length,
+    totalDuplicateItems: duplicateGroups.reduce((sum, g) => sum + g.items.length, 0),
+  });
+
+  return duplicateGroups;
+}
+
+/**
+ * Apply keep strategy to duplicate groups
+ * Determines which item to keep and which to delete
+ */
+export function applyKeepStrategy(
+  groups: DuplicateGroup[],
+  strategy: 'oldest' | 'newest'
+): DuplicateGroup[] {
+  return groups.map(group => {
+    const items = [...group.items];
+
+    // Items are already sorted by creation date (oldest first) in detectDuplicateGroups
+    // For 'oldest', keep first; for 'newest', keep last
+    const keepIndex = strategy === 'oldest' ? 0 : items.length - 1;
+    const keepItemId = items[keepIndex].itemId;
+
+    const deleteItemIds = items
+      .filter((_, idx) => idx !== keepIndex)
+      .map(item => item.itemId);
+
+    return {
+      ...group,
+      keepItemId,
+      deleteItemIds,
+    };
+  });
+}
