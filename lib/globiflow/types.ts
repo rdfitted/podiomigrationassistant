@@ -91,7 +91,7 @@ export interface FlowCloneJobResponse {
  */
 export interface FlowCloneJobStatusResponse {
   jobId: string;
-  status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'paused';
+  status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'paused' | 'cancelled' | 'detecting' | 'waiting_approval' | 'deleting';
   progress: {
     total: number;
     completed: number;

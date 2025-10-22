@@ -261,7 +261,7 @@ export function DryRunPreview({ preview, onExecute, onReset }: DryRunPreviewProp
                           Source Item #{item.sourceItemId} → New Item
                         </div>
                         <div className="text-xs text-gray-500 dark:text-gray-400">
-                          {item.matchValue && <>Match: {formatValue(item.matchValue)} • </>}
+                          {item.matchValue ? `Match: ${String(formatValue(item.matchValue))} • ` : ''}
                           {item.fieldCount} field{item.fieldCount !== 1 ? 's' : ''}
                         </div>
                       </div>

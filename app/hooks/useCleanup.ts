@@ -178,10 +178,10 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
       // Update global context with progress
       if (data.progress) {
         updateJobProgress('cleanup', {
-          total: data.progress.total,
-          processed: data.progress.processed,
-          successful: data.progress.successful,
-          failed: data.progress.failed,
+          total: data.progress.totalItemsToDelete,
+          processed: data.progress.processedGroups,
+          successful: data.progress.deletedItems,
+          failed: data.progress.failedDeletions,
           percent: data.progress.percent
         });
       }
@@ -276,10 +276,10 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
         status: data.status as MigrationJobStatus,
         startedAt: new Date(data.startedAt),
         progress: data.progress ? {
-          total: data.progress.total,
-          processed: data.progress.processed,
-          successful: data.progress.successful,
-          failed: data.progress.failed,
+          total: data.progress.totalItemsToDelete,
+          processed: data.progress.processedGroups,
+          successful: data.progress.deletedItems,
+          failed: data.progress.failedDeletions,
           percent: data.progress.percent
         } : undefined,
         description: `Cleanup job ${existingJobId}`
