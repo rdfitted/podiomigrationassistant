@@ -115,25 +115,20 @@ export async function uploadFile(
   });
 
   try {
-    // Create form data for file upload
-    const FormData = (await import('form-data')).default;
+    // Create form data for file upload using native FormData (Node.js 18+)
     const formData = new FormData();
 
-    // Append file buffer as a stream
-    formData.append('source', fileBuffer, {
-      filename: fileName,
-      contentType: 'application/octet-stream',
-    });
+    // Create a Blob from the buffer for the native FormData API
+    const blob = new Blob([fileBuffer], { type: 'application/octet-stream' });
+    formData.append('source', blob, fileName);
 
     if (options.description) {
       formData.append('description', options.description);
     }
 
-    // Upload the file using raw request
-    // Note: File upload requires multipart/form-data which is handled by form-data
+    // Upload the file using native fetch with FormData
     const response = await withRetry(
       async () => {
-        // Use node-fetch or similar for file upload with form-data
         const { getPodioAuthManager } = await import('../auth');
         const authManager = await getPodioAuthManager();
         const accessToken = await authManager.getAccessToken();
@@ -145,9 +140,10 @@ export async function uploadFile(
           method: 'POST',
           headers: {
             'Authorization': `OAuth2 ${accessToken}`,
-            ...formData.getHeaders(),
+            // Note: Don't set Content-Type header - fetch will set it automatically
+            // with the correct boundary for multipart/form-data
           },
-          body: formData as any,
+          body: formData,
         });
 
         if (!res.ok) {
