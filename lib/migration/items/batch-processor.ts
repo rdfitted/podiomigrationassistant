@@ -106,6 +106,7 @@ export interface BatchProcessorEvents {
  * const processor = new ItemBatchProcessor(client, appId, {
  *   batchSize: 500,
  *   concurrency: 5,
+ *   silent: true, // Suppress notifications (default)
  * });
  *
  * processor.on('progress', (stats) => {
