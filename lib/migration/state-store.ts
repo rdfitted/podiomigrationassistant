@@ -454,6 +454,27 @@ export class MigrationStateStore {
   }
 
   /**
+   * Update migration job metadata
+   */
+  async updateJobMetadata(
+    jobId: string,
+    metadata: Record<string, unknown>
+  ): Promise<void> {
+    const job = await this.getMigrationJob(jobId);
+    if (!job) {
+      throw new Error(`Migration job not found: ${jobId}`);
+    }
+
+    // Merge new metadata with existing
+    job.metadata = {
+      ...job.metadata,
+      ...metadata,
+    };
+    await this.saveMigrationJob(job);
+    logger.debug('Updated migration job metadata', { jobId, metadata });
+  }
+
+  /**
    * Delete a migration job
    */
   async deleteMigrationJob(jobId: string): Promise<void> {

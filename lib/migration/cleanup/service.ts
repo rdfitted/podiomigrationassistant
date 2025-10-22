@@ -137,7 +137,7 @@ export async function getCleanupJobStatus(jobId: string): Promise<CleanupStatusR
     throw new Error(`Job ${jobId} is not a cleanup job`);
   }
 
-  const progress = await migrationStateStore.getJobProgress(jobId);
+  const progress = job.progress;
 
   return {
     jobId: job.id,
