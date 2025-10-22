@@ -178,21 +178,23 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
       // Update global context with progress
       if (data.progress) {
         updateJobProgress('cleanup', {
-          total: data.progress.total,
-          processed: data.progress.processed,
-          successful: data.progress.successful,
-          failed: data.progress.failed,
-          percent: data.progress.percent
+          total: data.progress.totalItemsToDelete ?? 0,
+          processed: data.progress.processedGroups ?? 0,
+          successful: data.progress.deletedItems ?? 0,
+          failed: data.progress.failedDeletions ?? 0,
+          percent: data.progress.percent ?? 0
         });
       }
 
       // Update global context with status
       updateJobStatus('cleanup', data.status as MigrationJobStatus);
 
-      // Stop polling if job is completed, failed, or waiting for approval
+      // Stop polling if job is completed, failed, cancelled, paused, or waiting for approval
       if (
         data.status === 'completed' ||
         data.status === 'failed' ||
+        data.status === 'cancelled' ||
+        data.status === 'paused' ||
         data.status === 'waiting_approval'
       ) {
         setIsPolling(false);
@@ -276,10 +278,10 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
         status: data.status as MigrationJobStatus,
         startedAt: new Date(data.startedAt),
         progress: data.progress ? {
-          total: data.progress.total,
-          processed: data.progress.processed,
-          successful: data.progress.successful,
-          failed: data.progress.failed,
+          total: data.progress.totalItemsToDelete,
+          processed: data.progress.processedGroups,
+          successful: data.progress.deletedItems,
+          failed: data.progress.failedDeletions,
           percent: data.progress.percent
         } : undefined,
         description: `Cleanup job ${existingJobId}`

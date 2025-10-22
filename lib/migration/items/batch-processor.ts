@@ -399,16 +399,42 @@ export class ItemBatchProcessor extends EventEmitter {
       });
 
       try {
-        const batchResult = await bulkUpdateItems(
-          this.client,
-          batch,
-          {
-            concurrency: this.config.concurrency,
-            stopOnError: this.config.stopOnError,
-            retryConfig: { maxAttempts: this.config.maxRetries },
-            silent: this.config.silent,
-          }
-        );
+        // Check if this is a file-only migration (empty fields + transferFiles enabled)
+        const isFileOnlyMigration = this.config.transferFiles &&
+          batch.every(update => Object.keys(update.fields).length === 0);
+
+        let batchResult: BulkUpdateResult;
+
+        if (isFileOnlyMigration) {
+          // File-only migration: Skip item updates, only transfer files
+          migrationLogger.info('File-only migration detected - skipping field updates', {
+            batchNumber: batchNum + 1,
+            itemCount: batch.length,
+          });
+
+          // Create a mock successful result (no actual API calls for updates)
+          batchResult = {
+            successful: batch.map((update, idx) => ({
+              itemId: update.itemId,
+              revision: 0, // No revision change since we didn't update
+            })),
+            failed: [],
+            successCount: batch.length,
+            failureCount: 0,
+          };
+        } else {
+          // Normal migration: Update item fields
+          batchResult = await bulkUpdateItems(
+            this.client,
+            batch,
+            {
+              concurrency: this.config.concurrency,
+              stopOnError: this.config.stopOnError,
+              retryConfig: { maxAttempts: this.config.maxRetries },
+              silent: this.config.silent,
+            }
+          );
+        }
 
         // If file transfer is enabled, transfer files from source to target
         let transferItemFiles: ((client: PodioHttpClient, sourceItemId: number, targetItemId: number) => Promise<number[]>) | null = null;
@@ -425,6 +451,10 @@ export class ItemBatchProcessor extends EventEmitter {
             (update): update is UpdateWithSource =>
               typeof update.sourceItemId === 'number' && successfulItemIds.has(update.itemId)
           );
+
+          // Track file transfer failures for file-only migrations
+          let transferFailureCount = 0;
+          const transferFailures: Array<{ sourceItemId: number; targetItemId: number; error: string }> = [];
 
           if (transferCandidates.length > 0) {
             migrationLogger.info('Transferring files for updated items', {
@@ -458,10 +488,19 @@ export class ItemBatchProcessor extends EventEmitter {
                 const update = transferBatch[idx];
                 if (result.status === 'rejected') {
                   const error = result.reason;
+                  const errorMessage = error instanceof Error ? error.message : String(error);
+
                   migrationLogger.warn('Failed to transfer files for item', {
                     sourceItemId: update.sourceItemId,
                     targetItemId: update.itemId,
-                    error: error instanceof Error ? error.message : String(error),
+                    error: errorMessage,
+                  });
+
+                  transferFailureCount++;
+                  transferFailures.push({
+                    sourceItemId: update.sourceItemId,
+                    targetItemId: update.itemId,
+                    error: errorMessage,
                   });
                 }
               });
@@ -469,6 +508,38 @@ export class ItemBatchProcessor extends EventEmitter {
           } else {
             migrationLogger.info('No eligible items for file transfer in batch', {
               batchNumber: batchNum + 1,
+            });
+          }
+
+          // If this was a file-only batch, reflect transfer failures in batchResult only
+          // (let unified stats logic handle everything)
+          if (isFileOnlyMigration && transferFailureCount > 0) {
+            migrationLogger.warn('File-only migration had transfer failures', {
+              batchNumber: batchNum + 1,
+              transferFailureCount,
+              totalBatchItems: batch.length,
+            });
+
+            // Update batchResult to mark these items as failed
+            transferFailures.forEach(({ sourceItemId, targetItemId, error }) => {
+              // Remove from successful list
+              const successIdx = batchResult.successful.findIndex(s => s.itemId === targetItemId);
+              if (successIdx >= 0) {
+                batchResult.successful.splice(successIdx, 1);
+                batchResult.successCount--;
+              }
+
+              // Find the item in the batch to get its index
+              const batchIdx = batch.findIndex(u => u.itemId === targetItemId);
+
+              // Add to batchResult.failed (unified loop will handle result.failedItems and stats)
+              batchResult.failed.push({
+                itemId: targetItemId,
+                fields: {},
+                error: `File transfer failed: ${error}`,
+                index: batchIdx >= 0 ? batchIdx : 0,
+              });
+              batchResult.failureCount++;
             });
           }
         }
@@ -482,8 +553,12 @@ export class ItemBatchProcessor extends EventEmitter {
         result.failed += batchResult.failureCount;
 
         // Emit item-level events
-        batchResult.successful.forEach((item, idx) => {
-          this.emit('itemSuccess', start + idx, item);
+        // Map itemId → original batch index to avoid misaligned indices after removals
+        const idToBatchIndex = new Map<number, number>(batch.map((u, i) => [u.itemId, i]));
+        batchResult.successful.forEach((item) => {
+          const batchIdx = idToBatchIndex.get(item.itemId);
+          const globalIndex = batchIdx != null ? start + batchIdx : start;
+          this.emit('itemSuccess', globalIndex, item);
         });
 
         batchResult.failed.forEach((failure) => {
