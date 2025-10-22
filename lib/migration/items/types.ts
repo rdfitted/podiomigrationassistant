@@ -228,3 +228,114 @@ export interface ItemMigrationResult {
   }>;
   resumeToken?: string;
 }
+
+/**
+ * Delete operation phase
+ */
+export type DeletePhase = 'detecting' | 'deleting' | 'completed' | 'failed';
+
+/**
+ * Delete job request payload
+ */
+export interface DeleteJobRequestPayload {
+  appId: number;
+  filters?: ItemMigrationFilters;
+  maxItems?: number;
+  concurrency?: number;
+  stopOnError?: boolean;
+  dryRun?: boolean;
+}
+
+/**
+ * Delete job metadata
+ */
+export interface DeleteJobMetadata {
+  appId: number;
+  filters?: ItemMigrationFilters;
+  maxItems?: number;
+  concurrency?: number;
+  stopOnError?: boolean;
+  dryRun?: boolean;
+  /** Item IDs to delete (populated during detecting phase) */
+  itemIds?: number[];
+  /** Current phase of deletion */
+  phase: DeletePhase;
+  /** Phase-specific progress */
+  phaseProgress?: {
+    /** Progress in detecting phase (fetching items) */
+    detecting?: {
+      fetched: number;
+      estimatedTotal: number;
+      percent: number;
+    };
+    /** Progress in deleting phase (deleting items) */
+    deleting?: {
+      total: number;
+      processed: number;
+      successful: number;
+      failed: number;
+      percent: number;
+    };
+  };
+}
+
+/**
+ * Delete job status response
+ */
+export interface DeleteJobStatusResponse {
+  jobId: string;
+  status: 'planning' | 'in_progress' | 'completed' | 'failed' | 'paused' | 'cancelled';
+  phase: DeletePhase;
+  progress: {
+    total: number;
+    processed: number;
+    successful: number;
+    failed: number;
+    percent: number;
+    lastUpdate: string;
+  };
+  /** Current phase status message */
+  phaseStatus?: string;
+  /** Phase-specific progress details */
+  phaseProgress?: {
+    detecting?: {
+      fetched: number;
+      estimatedTotal: number;
+      percent: number;
+    };
+    deleting?: {
+      total: number;
+      processed: number;
+      successful: number;
+      failed: number;
+      percent: number;
+    };
+  };
+  /** Real-time throughput metrics */
+  throughput?: {
+    itemsPerSecond: number;
+    batchesPerMinute: number;
+    avgBatchDuration: number;
+    estimatedCompletionTime?: string;
+    rateLimitPauses: number;
+    totalRateLimitDelay: number;
+  };
+  errors: Array<{
+    itemId?: string;
+    message: string;
+    code?: string;
+    timestamp: string;
+  }>;
+  errorsByCategory?: Record<string, {
+    count: number;
+    percentage: number;
+    shouldRetry: boolean;
+  }>;
+  startedAt: string;
+  completedAt?: string;
+  failedItems?: Array<{
+    itemId: number;
+    error: string;
+    timestamp: string;
+  }>;
+}
