@@ -143,6 +143,7 @@ export class ItemBatchProcessor extends EventEmitter {
       maxRetries: config.maxRetries || 3,
       stopOnError: config.stopOnError || false,
       silent: config.silent !== undefined ? config.silent : true, // Default to silent mode
+      transferFiles: config.transferFiles ?? false,
     };
     this.stats = {
       processed: 0,
@@ -410,42 +411,65 @@ export class ItemBatchProcessor extends EventEmitter {
         );
 
         // If file transfer is enabled, transfer files from source to target
+        let transferItemFiles: ((client: PodioHttpClient, sourceItemId: number, targetItemId: number) => Promise<number[]>) | null = null;
         if (this.config.transferFiles) {
-          migrationLogger.info('Transferring files for updated items', {
-            batchNumber: batchNum + 1,
-            itemCount: batch.length,
-          });
+          const filesModule = await import('../../podio/resources/files');
+          transferItemFiles = filesModule.transferItemFiles;
+        }
 
-          // Import file transfer function
-          const { transferItemFiles } = await import('../../podio/resources/files');
+        if (transferItemFiles) {
+          const transferFilesFn = transferItemFiles;
+          const successfulItemIds = new Set(batchResult.successful.map((item) => item.itemId));
+          type UpdateWithSource = { itemId: number; fields: Record<string, unknown>; sourceItemId: number };
+          const transferCandidates = batch.filter(
+            (update): update is UpdateWithSource =>
+              typeof update.sourceItemId === 'number' && successfulItemIds.has(update.itemId)
+          );
 
-          // Transfer files for each successfully updated item
-          for (let i = 0; i < batch.length; i++) {
-            const update = batch[i];
+          if (transferCandidates.length > 0) {
+            migrationLogger.info('Transferring files for updated items', {
+              batchNumber: batchNum + 1,
+              itemCount: transferCandidates.length,
+              concurrency: this.config.concurrency,
+            });
 
-            // Only transfer if we have a source item ID
-            if (update.sourceItemId) {
-              try {
-                const transferredFileIds = await transferItemFiles(
-                  this.client,
-                  update.sourceItemId,
-                  update.itemId
-                );
+            const transferConcurrency = Math.max(1, this.config.concurrency || 1);
+            for (let i = 0; i < transferCandidates.length; i += transferConcurrency) {
+              const transferBatch = transferCandidates.slice(i, i + transferConcurrency);
+              const results = await Promise.allSettled(
+                transferBatch.map(async (update) => {
+                  const transferredFileIds = await transferFilesFn(
+                    this.client,
+                    update.sourceItemId,
+                    update.itemId
+                  );
 
-                migrationLogger.info('Files transferred for item', {
-                  sourceItemId: update.sourceItemId,
-                  targetItemId: update.itemId,
-                  fileCount: transferredFileIds.length,
-                });
-              } catch (error) {
-                migrationLogger.warn('Failed to transfer files for item', {
-                  sourceItemId: update.sourceItemId,
-                  targetItemId: update.itemId,
-                  error: error instanceof Error ? error.message : String(error),
-                });
-                // Don't fail the update if file transfer fails
-              }
+                  migrationLogger.info('Files transferred for item', {
+                    sourceItemId: update.sourceItemId,
+                    targetItemId: update.itemId,
+                    fileCount: transferredFileIds.length,
+                  });
+
+                  return transferredFileIds;
+                })
+              );
+
+              results.forEach((result, idx) => {
+                const update = transferBatch[idx];
+                if (result.status === 'rejected') {
+                  const error = result.reason;
+                  migrationLogger.warn('Failed to transfer files for item', {
+                    sourceItemId: update.sourceItemId,
+                    targetItemId: update.itemId,
+                    error: error instanceof Error ? error.message : String(error),
+                  });
+                }
+              });
             }
+          } else {
+            migrationLogger.info('No eligible items for file transfer in batch', {
+              batchNumber: batchNum + 1,
+            });
           }
         }
 
