@@ -1235,9 +1235,26 @@ export class ItemMigrator {
         cacheStats: prefetchCache?.getCacheStats() || null,
       });
 
+      // Validate: Check for items in wrong arrays for the mode (defensive check)
+      if (config.mode === 'update' && itemsToCreate.length > 0) {
+        migrationLogger.warn('UPDATE mode has items in itemsToCreate array - this should not happen', {
+          mode: config.mode,
+          itemsToCreate: itemsToCreate.length,
+          itemsToUpdate: itemsToUpdate.length,
+        });
+      }
+      if (config.mode === 'create' && itemsToUpdate.length > 0) {
+        migrationLogger.warn('CREATE mode has items in itemsToUpdate array - this should not happen', {
+          mode: config.mode,
+          itemsToCreate: itemsToCreate.length,
+          itemsToUpdate: itemsToUpdate.length,
+        });
+      }
+
       // Process updates first (if any)
+      // NOTE: Only UPDATE and UPSERT modes should update items. CREATE mode should never update.
       let updateResult;
-      if (itemsToUpdate.length > 0) {
+      if (itemsToUpdate.length > 0 && (config.mode === 'update' || config.mode === 'upsert')) {
         // DRY-RUN MODE: Generate preview instead of executing updates (applies to all modes)
         if (config.dryRun) {
           migrationLogger.info('Dry-run mode: Generating update preview', {
@@ -1333,8 +1350,9 @@ export class ItemMigrator {
       }
 
       // Process creates (if any)
+      // NOTE: Only CREATE and UPSERT modes should create items. UPDATE mode should never create.
       let createResult;
-      if (itemsToCreate.length > 0) {
+      if (itemsToCreate.length > 0 && (config.mode === 'create' || config.mode === 'upsert')) {
         // DRY-RUN MODE: Generate preview instead of executing creates (applies to all modes)
         if (config.dryRun) {
           migrationLogger.info('Dry-run mode: Generating create preview', {
