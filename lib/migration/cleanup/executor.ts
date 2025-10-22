@@ -114,7 +114,16 @@ export class CleanupExecutor extends EventEmitter {
       if (this.config.mode === 'manual') {
         // Manual mode: use approved groups
         if (this.config.approvedGroups && this.config.approvedGroups.length > 0) {
-          groupsToProcess = this.config.approvedGroups;
+          // Ensure approved groups have deleteItemIds set
+          // If not set (user didn't manually select), apply default keep strategy
+          groupsToProcess = this.config.approvedGroups.map(group => {
+            if (!group.deleteItemIds || group.deleteItemIds.length === 0) {
+              // Apply default strategy if user didn't select specific items
+              const processedGroups = applyKeepStrategy([group], this.config.keepStrategy);
+              return processedGroups[0];
+            }
+            return group;
+          });
         } else {
           // No approved groups yet - return for user approval
           logger.info('Manual mode: returning groups for approval', {
@@ -122,19 +131,30 @@ export class CleanupExecutor extends EventEmitter {
             groupCount: limitedGroups.length,
           });
 
+          // Calculate summary statistics from detected groups
+          const totalDuplicateItems = limitedGroups.reduce((sum, g) => sum + g.items.length, 0);
+          const totalUniqueItems = limitedGroups.length;
+
           await migrationStateStore.updateJobStatus(this.jobId, 'waiting_approval' as any);
-          await migrationStateStore.updateJobMetadata(this.jobId, {
-            duplicateGroups: limitedGroups,
-          });
+
+          // Store duplicate groups in job metadata for manual approval
+          const job = await migrationStateStore.getMigrationJob(this.jobId);
+          if (job) {
+            job.metadata = {
+              ...job.metadata,
+              duplicateGroups: limitedGroups,
+            };
+            await migrationStateStore.saveMigrationJob(job);
+          }
 
           const preview: CleanupDryRunPreview = {
             totalGroups: limitedGroups.length,
             totalItemsToDelete: 0,
             duplicateGroups: limitedGroups,
             summary: {
-              totalSourceItems: items.length,
-              uniqueItems: items.length - limitedGroups.reduce((sum, g) => sum + g.items.length, 0) + limitedGroups.length,
-              duplicateItems: limitedGroups.reduce((sum, g) => sum + g.items.length - 1, 0),
+              totalSourceItems: totalDuplicateItems,
+              uniqueItems: totalUniqueItems,
+              duplicateItems: totalDuplicateItems - totalUniqueItems,
               groupsWithDuplicates: limitedGroups.length,
             },
           };
@@ -161,13 +181,17 @@ export class CleanupExecutor extends EventEmitter {
 
       // If dry run, return preview
       if (this.config.dryRun) {
+        // Calculate summary statistics from processed groups
+        const totalDuplicateItems = groupsToProcess.reduce((sum, g) => sum + g.items.length, 0);
+        const totalUniqueItems = groupsToProcess.length;
+
         const preview: CleanupDryRunPreview = {
           totalGroups: groupsToProcess.length,
           totalItemsToDelete,
           duplicateGroups: groupsToProcess,
           summary: {
-            totalSourceItems: items.length,
-            uniqueItems: items.length - groupsToProcess.reduce((sum, g) => sum + g.items.length, 0) + groupsToProcess.length,
+            totalSourceItems: totalDuplicateItems,
+            uniqueItems: totalUniqueItems,
             duplicateItems: totalItemsToDelete,
             groupsWithDuplicates: groupsToProcess.length,
           },

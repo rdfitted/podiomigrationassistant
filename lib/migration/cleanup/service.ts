@@ -4,7 +4,7 @@
  */
 
 import { migrationStateStore } from '../state-store';
-import { CleanupRequestPayload, CleanupStatusResponse, CleanupResult, DuplicateGroup, DuplicateItem } from './types';
+import { CleanupRequestPayload, CleanupStatusResponse, CleanupResult, DuplicateGroup, DuplicateItem, CleanupMode, KeepStrategy, JobStatus } from './types';
 import { getAppStructureDetailed } from '../../podio/migration';
 import { logger } from '../logging';
 import { normalizeForMatch } from '../items/prefetch-cache';

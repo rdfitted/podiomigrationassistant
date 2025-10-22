@@ -46,7 +46,7 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
   const [isExecuting, setIsExecuting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollAbortRef = useRef<AbortController | null>(null);
 
   /**
@@ -241,9 +241,9 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
         setDuplicateGroups(data.duplicateGroups);
       }
 
-      // Start polling if job is still in progress or detecting
+      // Start polling if job is still in progress
       if (
-        data.status === 'in_progress' ||
+        data.status === 'planning' ||
         data.status === 'detecting' ||
         data.status === 'deleting'
       ) {
