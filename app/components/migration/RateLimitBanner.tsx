@@ -56,6 +56,9 @@ export function RateLimitBanner() {
   const percentUsed = Math.round(((limit - remaining) / limit) * 100);
   const percentRemaining = 100 - percentUsed;
 
+  // Calculate thresholds based on percentage of limit used
+  const remainingPercent = (remaining / limit) * 100;
+
   // Determine severity and whether to show
   let severity: 'error' | 'warning' | 'info' = 'info';
   let shouldShow = false;
@@ -63,10 +66,10 @@ export function RateLimitBanner() {
   if (isLimited) {
     severity = 'error';
     shouldShow = true;
-  } else if (remaining < 50) {
+  } else if (remainingPercent < 10) { // Less than 10% remaining
     severity = 'warning';
     shouldShow = true;
-  } else if (remaining < 100) {
+  } else if (remainingPercent < 20) { // Less than 20% remaining
     severity = 'info';
     shouldShow = true;
   }
@@ -121,7 +124,7 @@ export function RateLimitBanner() {
             {isLimited ? (
               <div>
                 <p>
-                  All API requests ({limit} per hour) have been used.
+                  The hourly API rate limit has been reached.
                   Migrations will automatically resume when the quota resets.
                 </p>
                 <div className="mt-2 flex items-center gap-2">
@@ -134,8 +137,8 @@ export function RateLimitBanner() {
             ) : (
               <div>
                 <p>
-                  Only {remaining} of {limit} API requests remaining ({percentRemaining}% quota available).
-                  {remaining < 20 && ' Migrations may pause soon to avoid hitting the rate limit.'}
+                  API quota is running low ({percentRemaining}% remaining).
+                  {remainingPercent < 10 && ' Migrations may pause soon to avoid hitting the rate limit.'}
                 </p>
                 <div className="mt-2 flex items-center gap-2">
                   <div className="font-medium">Quota resets in:</div>
@@ -153,7 +156,7 @@ export function RateLimitBanner() {
               className={`h-full transition-all duration-300 ${
                 isLimited
                   ? 'bg-red-500'
-                  : remaining < 50
+                  : remainingPercent < 10
                   ? 'bg-yellow-500'
                   : 'bg-blue-500'
               }`}
@@ -161,7 +164,7 @@ export function RateLimitBanner() {
             />
           </div>
           <div className={`mt-1 text-xs ${textColor} opacity-75 text-right`}>
-            {remaining}/{limit} requests remaining
+            {percentRemaining}% quota remaining
           </div>
         </div>
       </div>

@@ -153,9 +153,11 @@ async function parallelBatchProcessing(
 
 ### Podio API Rate Limits
 
-- **Standard**: ~250 requests per hour per app
-- **Premium**: ~5,000 requests per hour per app
-- **Headers**: `X-Rate-Limit-Remaining`, `X-Rate-Limit-Reset`
+- **Dynamic Limits**: Rate limits vary by account type and are provided by Podio via API headers
+- **Detection**: Automatically detected from response headers and 420/429 status codes
+- **Headers**: `X-Rate-Limit-Limit`, `X-Rate-Limit-Remaining`, `X-Rate-Limit-Reset`, `Retry-After`
+- **Status Codes**: 420 (Enhance Your Calm) and 429 (Too Many Requests) indicate rate limits
+- **Note**: The application tracks and adapts to your account's specific rate limit automatically
 
 ### Rate Limit Strategy
 
@@ -170,13 +172,14 @@ async function handleRateLimits<T>(
     try {
       return await operation();
     } catch (error) {
-      if (error.statusCode === 429) {
+      if (error.statusCode === 420 || error.statusCode === 429) {
         // Rate limit hit
-        const resetTime = parseInt(error.headers['x-rate-limit-reset']);
-        const waitTime = Math.max(
-          resetTime - Date.now(),
-          60000 // Minimum 1 minute
-        );
+        const resetSec = parseInt(error.headers['x-rate-limit-reset'] ?? '0', 10);
+        const retryAfterSec = parseInt(error.headers['retry-after'] ?? '0', 10);
+        const nowMs = Date.now();
+        const resetMs = resetSec > 0 ? (resetSec * 1000) - nowMs : 0;
+        const retryAfterMs = retryAfterSec > 0 ? retryAfterSec * 1000 : 0;
+        const waitTime = Math.max(0, Math.max(resetMs, retryAfterMs, 60_000)); // ≥ 60s
 
         await delay(waitTime);
         retries++;
