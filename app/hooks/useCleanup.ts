@@ -47,6 +47,7 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
   const [error, setError] = useState<string | null>(null);
 
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const pollAbortRef = useRef<AbortController | null>(null);
 
   /**
    * Start a new cleanup job
@@ -135,7 +136,13 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
    */
   const pollJobStatus = useCallback(async (currentJobId: string) => {
     try {
-      const response = await fetch(`/api/migration/cleanup/${currentJobId}`);
+      // Abort previous request if still in flight
+      pollAbortRef.current?.abort();
+      pollAbortRef.current = new AbortController();
+
+      const response = await fetch(`/api/migration/cleanup/${currentJobId}`, {
+        signal: pollAbortRef.current.signal,
+      });
 
       if (!response.ok) {
         if (response.status === 404) {
@@ -163,6 +170,10 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
         setIsPolling(false);
       }
     } catch (err) {
+      // Ignore abort errors
+      if (err instanceof Error && err.name === 'AbortError') {
+        return;
+      }
       setError(err instanceof Error ? err.message : 'Failed to poll job status');
       setIsPolling(false);
     }
@@ -185,6 +196,8 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
         if (pollIntervalRef.current) {
           clearInterval(pollIntervalRef.current);
         }
+        // Abort any in-flight request
+        pollAbortRef.current?.abort();
       };
     }
   }, [jobId, isPolling, pollInterval, pollJobStatus]);
@@ -198,6 +211,9 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
       clearInterval(pollIntervalRef.current);
       pollIntervalRef.current = null;
     }
+    // Abort any in-flight request
+    pollAbortRef.current?.abort();
+    pollAbortRef.current = null;
   }, []);
 
   /**

@@ -139,25 +139,32 @@ export async function getCleanupJobStatus(jobId: string): Promise<CleanupStatusR
     throw new Error(`Job ${jobId} is not a cleanup job`);
   }
 
+  // Extract cleanup-specific metadata
+  const metadata = job.metadata || {};
+  const mode = metadata.mode as CleanupMode || 'manual';
+  const keepStrategy = metadata.keepStrategy as KeepStrategy || 'oldest';
+  const duplicateGroups = metadata.duplicateGroups as DuplicateGroup[] | undefined;
+
   const progress = job.progress;
+  const progressMetadata = progress as any; // Progress can have custom fields
 
   return {
     jobId: job.id,
-    status: job.status as any,
-    mode: (job as any).mode,
-    keepStrategy: (job as any).keepStrategy,
+    status: job.status as JobStatus,
+    mode,
+    keepStrategy,
     progress: {
       totalGroups: progress?.total || 0,
       processedGroups: progress?.processed || 0,
-      totalItemsToDelete: (progress as any)?.totalItemsToDelete || 0,
+      totalItemsToDelete: progressMetadata?.totalItemsToDelete || 0,
       deletedItems: progress?.successful || 0,
       failedDeletions: progress?.failed || 0,
       percent: progress?.percent || 0,
       lastUpdate: progress?.lastUpdate?.toISOString() || new Date().toISOString(),
     },
-    duplicateGroups: (job as any).duplicateGroups,
+    duplicateGroups,
     errors: job.errors?.map(err => ({
-      itemId: err.itemId ? Number(err.itemId) : undefined,
+      itemId: (err as any).itemId ? Number((err as any).itemId) : undefined,
       message: err.message,
       code: err.code,
       timestamp: err.timestamp.toISOString(),
