@@ -2,6 +2,18 @@ import { PodioHttpClient } from '../http/client';
 import { logger } from '../logging';
 import { withRetry, createRetryConfig } from '../http/retry';
 
+// Re-export file functions for convenience
+export {
+  getFile,
+  downloadFile,
+  uploadFile,
+  attachFileToItem,
+  getItemFiles,
+  transferItemFiles,
+  type PodioFile,
+  type FileUploadResponse,
+} from './files';
+
 /**
  * Item field value types
  */

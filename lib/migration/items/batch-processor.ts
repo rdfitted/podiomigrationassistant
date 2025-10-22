@@ -32,6 +32,8 @@ export interface BatchProcessorConfig {
   stopOnError: boolean;
   /** Whether to suppress notifications for creates/updates (default: true) */
   silent?: boolean;
+  /** Whether to transfer files during updates (default: false) */
+  transferFiles?: boolean;
 }
 
 /**
@@ -141,6 +143,7 @@ export class ItemBatchProcessor extends EventEmitter {
       maxRetries: config.maxRetries || 3,
       stopOnError: config.stopOnError || false,
       silent: config.silent !== undefined ? config.silent : true, // Default to silent mode
+      transferFiles: config.transferFiles ?? false,
     };
     this.stats = {
       processed: 0,
@@ -406,6 +409,69 @@ export class ItemBatchProcessor extends EventEmitter {
             silent: this.config.silent,
           }
         );
+
+        // If file transfer is enabled, transfer files from source to target
+        let transferItemFiles: ((client: PodioHttpClient, sourceItemId: number, targetItemId: number) => Promise<number[]>) | null = null;
+        if (this.config.transferFiles) {
+          const filesModule = await import('../../podio/resources/files');
+          transferItemFiles = filesModule.transferItemFiles;
+        }
+
+        if (transferItemFiles) {
+          const transferFilesFn = transferItemFiles;
+          const successfulItemIds = new Set(batchResult.successful.map((item) => item.itemId));
+          type UpdateWithSource = { itemId: number; fields: Record<string, unknown>; sourceItemId: number };
+          const transferCandidates = batch.filter(
+            (update): update is UpdateWithSource =>
+              typeof update.sourceItemId === 'number' && successfulItemIds.has(update.itemId)
+          );
+
+          if (transferCandidates.length > 0) {
+            migrationLogger.info('Transferring files for updated items', {
+              batchNumber: batchNum + 1,
+              itemCount: transferCandidates.length,
+              concurrency: this.config.concurrency,
+            });
+
+            const transferConcurrency = Math.max(1, this.config.concurrency || 1);
+            for (let i = 0; i < transferCandidates.length; i += transferConcurrency) {
+              const transferBatch = transferCandidates.slice(i, i + transferConcurrency);
+              const results = await Promise.allSettled(
+                transferBatch.map(async (update) => {
+                  const transferredFileIds = await transferFilesFn(
+                    this.client,
+                    update.sourceItemId,
+                    update.itemId
+                  );
+
+                  migrationLogger.info('Files transferred for item', {
+                    sourceItemId: update.sourceItemId,
+                    targetItemId: update.itemId,
+                    fileCount: transferredFileIds.length,
+                  });
+
+                  return transferredFileIds;
+                })
+              );
+
+              results.forEach((result, idx) => {
+                const update = transferBatch[idx];
+                if (result.status === 'rejected') {
+                  const error = result.reason;
+                  migrationLogger.warn('Failed to transfer files for item', {
+                    sourceItemId: update.sourceItemId,
+                    targetItemId: update.itemId,
+                    error: error instanceof Error ? error.message : String(error),
+                  });
+                }
+              });
+            }
+          } else {
+            migrationLogger.info('No eligible items for file transfer in batch', {
+              batchNumber: batchNum + 1,
+            });
+          }
+        }
 
         // Update stats
         this.stats.successful += batchResult.successCount;
