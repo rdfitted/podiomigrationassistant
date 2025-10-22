@@ -8,6 +8,7 @@ import { CleanupRequestPayload, CleanupStatusResponse, CleanupResult, DuplicateG
 import { getAppStructureDetailed } from '../../podio/migration';
 import { logger } from '../logging';
 import { normalizeForMatch } from '../items/prefetch-cache';
+import { CleanupJobNotFoundError, CleanupValidationError } from './errors';
 
 /**
  * Field types that are valid for matching
@@ -129,7 +130,7 @@ export async function getCleanupJobStatus(jobId: string): Promise<CleanupStatusR
   const job = await migrationStateStore.getMigrationJob(jobId);
 
   if (!job) {
-    throw new Error(`Cleanup job not found: ${jobId}`);
+    throw new CleanupJobNotFoundError(jobId);
   }
 
   if (job.jobType !== 'cleanup') {

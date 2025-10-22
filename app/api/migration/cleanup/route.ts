@@ -10,7 +10,7 @@ import { CleanupRequestPayload } from '@/lib/migration/cleanup/types';
 import { loadPodioConfig } from '@/lib/podio/config';
 import { migrationStateStore } from '@/lib/migration/state-store';
 import { executeCleanup } from '@/lib/migration/cleanup/executor';
-import { createPodioHttpClient } from '@/lib/podio/http/client';
+import { getPodioHttpClient } from '@/lib/podio/http/client';
 
 export const runtime = 'nodejs';
 
@@ -111,11 +111,16 @@ export async function POST(request: NextRequest) {
     const { jobId } = await createCleanupJob(body);
 
     // Start background job execution (non-blocking)
-    const config = loadPodioConfig();
-    const client = createPodioHttpClient(config);
+    const client = getPodioHttpClient();
 
-    executeCleanup(client, jobId, body).catch((error) => {
+    executeCleanup(client, jobId, body).catch(async (error) => {
       console.error('Background cleanup execution failed:', error);
+      // Update job status to failed so polling clients can detect the failure
+      try {
+        await migrationStateStore.updateJobStatus(jobId, 'failed', error.message);
+      } catch (updateError) {
+        console.error('Failed to update job status to failed:', updateError);
+      }
     });
 
     // Return job ID immediately

@@ -47,7 +47,7 @@ export function FlowCloneJobStatus({ jobStatus, onClose }: FlowCloneJobStatusPro
       <div className="p-4 bg-white dark:bg-gray-900">
         <div className="mb-3">
           <div className="flex justify-between text-xs text-gray-600 dark:text-gray-400 mb-1">
-            <span className="capitalize">{status.replace('_', ' ')}</span>
+            <span className="capitalize">{status.split('_').join(' ')}</span>
             <span>{progressPercent}%</span>
           </div>
           <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2 overflow-hidden">

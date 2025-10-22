@@ -161,7 +161,7 @@ export function MigrationSelectionPanel({ onSelectionChange }: MigrationSelectio
           {/* Source column */}
           <div className="flex-1">
             <SelectionColumn
-              title="Source"
+              title={activeTab === 'cleanup' ? 'App' : 'Source'}
               selection={source}
               organizations={organizations}
               organizationsLoading={organizationsLoading}
@@ -179,35 +179,39 @@ export function MigrationSelectionPanel({ onSelectionChange }: MigrationSelectio
             />
           </div>
 
-          {/* Vertical divider */}
-          <div className="flex flex-col items-center justify-center py-8">
-            <div className="flex-1 border-l border-gray-300 dark:border-gray-700"></div>
-            <svg className="w-6 h-6 my-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-            </svg>
-            <div className="flex-1 border-l border-gray-300 dark:border-gray-700"></div>
-          </div>
+          {/* Vertical divider - Hide for cleanup tab */}
+          {activeTab !== 'cleanup' && (
+            <div className="flex flex-col items-center justify-center py-8">
+              <div className="flex-1 border-l border-gray-300 dark:border-gray-700"></div>
+              <svg className="w-6 h-6 my-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+              </svg>
+              <div className="flex-1 border-l border-gray-300 dark:border-gray-700"></div>
+            </div>
+          )}
 
-          {/* Destination column */}
-          <div className="flex-1">
-            <SelectionColumn
-              title="Destination"
-              selection={destination}
-              organizations={organizations}
-              organizationsLoading={organizationsLoading}
-              organizationsError={organizationsError}
-              onOrganizationChange={setDestinationOrg}
-              spaces={destinationSpaces}
-              spacesLoading={destinationSpacesLoading}
-              spacesError={destinationSpacesError}
-              onSpaceChange={setDestinationSpace}
-              apps={destinationApps}
-              appsLoading={destinationAppsLoading}
-              appsError={destinationAppsError}
-              onAppChange={setDestinationApp}
-              onRetry={refresh}
-            />
-          </div>
+          {/* Destination column - Hide for cleanup tab */}
+          {activeTab !== 'cleanup' && (
+            <div className="flex-1">
+              <SelectionColumn
+                title="Destination"
+                selection={destination}
+                organizations={organizations}
+                organizationsLoading={organizationsLoading}
+                organizationsError={organizationsError}
+                onOrganizationChange={setDestinationOrg}
+                spaces={destinationSpaces}
+                spacesLoading={destinationSpacesLoading}
+                spacesError={destinationSpacesError}
+                onSpaceChange={setDestinationSpace}
+                apps={destinationApps}
+                appsLoading={destinationAppsLoading}
+                appsError={destinationAppsError}
+                onAppChange={setDestinationApp}
+                onRetry={refresh}
+              />
+            </div>
+          )}
         </div>
 
         {/* Status indicator */}

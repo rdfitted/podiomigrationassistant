@@ -349,7 +349,7 @@ export function CleanupPanel({ appId }: CleanupPanelProps) {
                     : 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
                 }`}
               >
-                {jobStatus.status.replace('_', ' ').toUpperCase()}
+                {jobStatus.status.split('_').join(' ').toUpperCase()}
               </span>
             </div>
             <button

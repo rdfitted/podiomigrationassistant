@@ -5,6 +5,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getCleanupJobStatus } from '@/lib/migration/cleanup/service';
+import { CleanupJobNotFoundError } from '@/lib/migration/cleanup/errors';
 
 export const runtime = 'nodejs';
 
@@ -36,7 +37,7 @@ export async function GET(
     console.error('Failed to get cleanup job status:', error);
 
     // Check if it's a "not found" error
-    if (error instanceof Error && error.message.includes('not found')) {
+    if (error instanceof CleanupJobNotFoundError) {
       return NextResponse.json(
         {
           error: 'Not found',
