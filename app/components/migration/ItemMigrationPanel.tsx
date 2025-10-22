@@ -215,6 +215,8 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
       maxItems,
       dryRun, // Dry-run is now supported for all modes (CREATE, UPDATE, UPSERT)
       transferFiles: (mode === 'update' || mode === 'upsert') ? transferFiles : undefined, // Only for UPDATE/UPSERT modes
+      // If transferring files without custom field mapping, explicitly pass empty mapping to prevent auto-mapping
+      fieldMapping: (!isUsingCustomMapping && transferFiles && (mode === 'update' || mode === 'upsert')) ? {} : undefined,
     });
   };
 
