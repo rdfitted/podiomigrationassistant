@@ -81,7 +81,7 @@ export function ItemMigrationProgress({ jobStatus, isActive }: ItemMigrationProg
       <div className={`inline-flex items-center px-3 py-1 rounded-full ${statusColors[status]}`}>
         <span className="mr-2">{statusIcons[status]}</span>
         <span className={`text-sm font-medium ${statusTextColors[status]}`}>
-          {status.charAt(0).toUpperCase() + status.slice(1).replace('_', ' ')}
+          {status.charAt(0).toUpperCase() + status.slice(1).split('_').join(' ')}
         </span>
       </div>
 

@@ -6,12 +6,12 @@ import { logger } from './logging';
 /**
  * Migration job status types
  */
-export type MigrationJobStatus = 'planning' | 'in_progress' | 'completed' | 'failed' | 'paused' | 'cancelled';
+export type MigrationJobStatus = 'planning' | 'in_progress' | 'completed' | 'failed' | 'paused' | 'cancelled' | 'detecting' | 'waiting_approval' | 'deleting';
 
 /**
  * Migration job types
  */
-export type MigrationJobType = 'flow_clone' | 'item_migration';
+export type MigrationJobType = 'flow_clone' | 'item_migration' | 'cleanup';
 
 /**
  * Migration step types
@@ -451,6 +451,27 @@ export class MigrationStateStore {
     job.progress = progress;
     await this.saveMigrationJob(job);
     logger.debug('Updated migration job progress', { jobId, progress });
+  }
+
+  /**
+   * Update migration job metadata
+   */
+  async updateJobMetadata(
+    jobId: string,
+    metadata: Record<string, unknown>
+  ): Promise<void> {
+    const job = await this.getMigrationJob(jobId);
+    if (!job) {
+      throw new Error(`Migration job not found: ${jobId}`);
+    }
+
+    // Merge new metadata with existing
+    job.metadata = {
+      ...job.metadata,
+      ...metadata,
+    };
+    await this.saveMigrationJob(job);
+    logger.debug('Updated migration job metadata', { jobId, metadata });
   }
 
   /**
