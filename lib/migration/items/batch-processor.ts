@@ -30,6 +30,8 @@ export interface BatchProcessorConfig {
   maxRetries: number;
   /** Whether to stop processing on first error (default: false) */
   stopOnError: boolean;
+  /** Whether to suppress notifications for creates/updates (default: true) */
+  silent?: boolean;
 }
 
 /**
@@ -104,6 +106,7 @@ export interface BatchProcessorEvents {
  * const processor = new ItemBatchProcessor(client, appId, {
  *   batchSize: 500,
  *   concurrency: 5,
+ *   silent: true, // Suppress notifications (default)
  * });
  *
  * processor.on('progress', (stats) => {
@@ -137,6 +140,7 @@ export class ItemBatchProcessor extends EventEmitter {
       concurrency: config.concurrency || 5,
       maxRetries: config.maxRetries || 3,
       stopOnError: config.stopOnError || false,
+      silent: config.silent !== undefined ? config.silent : true, // Default to silent mode
     };
     this.stats = {
       processed: 0,
@@ -235,6 +239,7 @@ export class ItemBatchProcessor extends EventEmitter {
             concurrency: this.config.concurrency,
             stopOnError: this.config.stopOnError,
             retryConfig: { maxAttempts: this.config.maxRetries },
+            silent: this.config.silent,
           }
         );
 
@@ -398,6 +403,7 @@ export class ItemBatchProcessor extends EventEmitter {
             concurrency: this.config.concurrency,
             stopOnError: this.config.stopOnError,
             retryConfig: { maxAttempts: this.config.maxRetries },
+            silent: this.config.silent,
           }
         );
 
