@@ -603,28 +603,40 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
             </label>
           </div>
 
-          {/* File Transfer - Only for UPDATE and UPSERT modes */}
-          {(mode === 'update' || mode === 'upsert') && (
-            <div className="bg-purple-50 dark:bg-purple-900/10 border border-purple-200 dark:border-purple-800 rounded-md p-4">
-              <label className="flex items-start cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={transferFiles}
-                  onChange={(e) => setTransferFiles(e.target.checked)}
-                  className="mt-0.5 mr-3 h-4 w-4 text-purple-600 rounded border-gray-300 focus:ring-purple-500"
-                  disabled={isCreating}
-                />
-                <div>
-                  <span className="text-sm font-medium text-purple-900 dark:text-purple-100">
-                    📎 Files
-                  </span>
-                  <p className="mt-1 text-xs text-purple-700 dark:text-purple-300">
-                    Transfer all attached files from source items to destination items. Files will be downloaded from source and re-uploaded to the target app.
-                  </p>
-                </div>
-              </label>
-            </div>
-          )}
+          {/* File Transfer - Always visible, disabled for CREATE mode */}
+          <div className={`rounded-md p-4 ${
+            mode === 'create'
+              ? 'bg-gray-50 dark:bg-gray-900/10 border border-gray-200 dark:border-gray-700'
+              : 'bg-purple-50 dark:bg-purple-900/10 border border-purple-200 dark:border-purple-800'
+          }`}>
+            <label className="flex items-start cursor-pointer">
+              <input
+                type="checkbox"
+                checked={transferFiles}
+                onChange={(e) => setTransferFiles(e.target.checked)}
+                className="mt-0.5 mr-3 h-4 w-4 text-purple-600 rounded border-gray-300 focus:ring-purple-500"
+                disabled={isCreating || mode === 'create'}
+              />
+              <div>
+                <span className={`text-sm font-medium ${
+                  mode === 'create'
+                    ? 'text-gray-600 dark:text-gray-400'
+                    : 'text-purple-900 dark:text-purple-100'
+                }`}>
+                  📎 Files
+                </span>
+                <p className={`mt-1 text-xs ${
+                  mode === 'create'
+                    ? 'text-gray-500 dark:text-gray-500'
+                    : 'text-purple-700 dark:text-purple-300'
+                }`}>
+                  {mode === 'create'
+                    ? 'File transfer is only available for UPDATE and UPSERT modes where items already exist in the destination.'
+                    : 'Transfer all attached files from source items to destination items. Files will be downloaded from source and re-uploaded to the target app.'}
+                </p>
+              </div>
+            </label>
+          </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div>
