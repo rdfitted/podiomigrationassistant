@@ -11,6 +11,7 @@ import { useChatSession } from './hooks/useChatSession';
 import { ConversationView } from './components/chat/ConversationView';
 import { ChatControls } from './components/chat/ChatControls';
 import { MigrationSelectionPanel } from './components/migration/MigrationSelectionPanel';
+import { MigrationProvider } from './contexts/MigrationContext';
 import type { ChatMessage } from '@/lib/chat/types';
 import type { MigrationSelectionState } from './hooks/useMigrationSelection';
 
@@ -73,7 +74,8 @@ export default function Chat() {
   };
 
   return (
-    <div className="flex h-screen bg-gray-50 dark:bg-gray-900 relative">
+    <MigrationProvider>
+      <div className="flex h-screen bg-gray-50 dark:bg-gray-900 relative">
       {/* Main chat column */}
       <div className={`flex flex-1 flex-col overflow-hidden transition-all duration-300 ${isPanelOpen ? 'ml-[5%]' : ''}`}>
         {/* Header */}
@@ -154,6 +156,7 @@ export default function Chat() {
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
         </svg>
       </button>
-    </div>
+      </div>
+    </MigrationProvider>
   );
 }

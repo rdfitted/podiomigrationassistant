@@ -5,6 +5,8 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { ItemMigrationRequestPayload, ItemMigrationStatusResponse, FieldMapping } from '@/lib/migration/items/types';
+import { useMigrationContext } from '@/app/contexts/MigrationContext';
+import type { MigrationJobStatus } from '@/app/contexts/MigrationContext';
 
 interface UseItemMigrationOptions {
   sourceAppId?: number;
@@ -34,6 +36,9 @@ interface UseItemMigrationReturn {
 
 export function useItemMigration(options: UseItemMigrationOptions = {}): UseItemMigrationReturn {
   const { sourceAppId, targetAppId, pollInterval = 3000 } = options;
+
+  // Get migration context
+  const { registerJob, unregisterJob, updateJobProgress, updateJobStatus } = useMigrationContext();
 
   const [jobId, setJobId] = useState<string | null>(null);
   const [jobStatus, setJobStatus] = useState<ItemMigrationStatusResponse | null>(null);
@@ -96,6 +101,15 @@ export function useItemMigration(options: UseItemMigrationOptions = {}): UseItem
         setJobId(data.jobId);
         setFieldMapping(data.fieldMapping);
         setIsPolling(true);
+
+        // Register with global migration context
+        registerJob({
+          jobId: data.jobId,
+          tabType: 'item_migration',
+          status: 'planning',
+          startedAt: new Date(),
+          description: `Migrating items from app ${sourceAppId} to ${targetAppId}`
+        });
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Unknown error');
       } finally {
@@ -123,6 +137,20 @@ export function useItemMigration(options: UseItemMigrationOptions = {}): UseItem
 
       const data: ItemMigrationStatusResponse = await response.json();
       setJobStatus(data);
+
+      // Update global context with progress
+      if (data.progress) {
+        updateJobProgress('item_migration', {
+          total: data.progress.total,
+          processed: data.progress.processed,
+          successful: data.progress.successful,
+          failed: data.progress.failed,
+          percent: data.progress.percent
+        });
+      }
+
+      // Update global context with status
+      updateJobStatus('item_migration', data.status as MigrationJobStatus);
 
       // Stop polling if job is completed or failed
       if (data.status === 'completed' || data.status === 'failed') {
@@ -189,6 +217,22 @@ export function useItemMigration(options: UseItemMigrationOptions = {}): UseItem
       // Note: Field mapping is stored in job metadata and used during resumption
       // We don't need to set it here for UI purposes
 
+      // Register with global migration context
+      registerJob({
+        jobId: existingJobId,
+        tabType: 'item_migration',
+        status: data.status as MigrationJobStatus,
+        startedAt: new Date(data.startedAt),
+        progress: data.progress ? {
+          total: data.progress.total,
+          processed: data.progress.processed,
+          successful: data.progress.successful,
+          failed: data.progress.failed,
+          percent: data.progress.percent
+        } : undefined,
+        description: `Migration job ${existingJobId}`
+      });
+
       // Start polling if job is still in progress or paused
       if (data.status === 'in_progress' || data.status === 'paused') {
         setIsPolling(true);
@@ -243,7 +287,10 @@ export function useItemMigration(options: UseItemMigrationOptions = {}): UseItem
     setFieldMappingOverride(null);
     setIsCreating(false);
     setIsRetrying(false);
-  }, [stopPolling]);
+
+    // Unregister from global context
+    unregisterJob('item_migration');
+  }, [stopPolling, unregisterJob]);
 
   return {
     jobId,

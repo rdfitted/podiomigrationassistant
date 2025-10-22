@@ -11,6 +11,8 @@ import {
   CleanupMode,
   KeepStrategy,
 } from '@/lib/migration/cleanup/types';
+import { useMigrationContext } from '@/app/contexts/MigrationContext';
+import type { MigrationJobStatus } from '@/app/contexts/MigrationContext';
 
 interface UseCleanupOptions {
   appId?: number;
@@ -37,6 +39,9 @@ interface UseCleanupReturn {
 
 export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
   const { appId, pollInterval = 3000 } = options;
+
+  // Get migration context
+  const { registerJob, unregisterJob, updateJobProgress, updateJobStatus } = useMigrationContext();
 
   const [jobId, setJobId] = useState<string | null>(null);
   const [jobStatus, setJobStatus] = useState<CleanupStatusResponse | null>(null);
@@ -84,6 +89,15 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
         const data = await response.json();
         setJobId(data.jobId);
         setIsPolling(true);
+
+        // Register with global migration context
+        registerJob({
+          jobId: data.jobId,
+          tabType: 'cleanup',
+          status: 'planning',
+          startedAt: new Date(),
+          description: `Cleanup duplicates in app ${appId}`
+        });
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Unknown error');
       } finally {
@@ -160,6 +174,20 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
       if (data.duplicateGroups) {
         setDuplicateGroups(data.duplicateGroups);
       }
+
+      // Update global context with progress
+      if (data.progress) {
+        updateJobProgress('cleanup', {
+          total: data.progress.total,
+          processed: data.progress.processed,
+          successful: data.progress.successful,
+          failed: data.progress.failed,
+          percent: data.progress.percent
+        });
+      }
+
+      // Update global context with status
+      updateJobStatus('cleanup', data.status as MigrationJobStatus);
 
       // Stop polling if job is completed, failed, or waiting for approval
       if (
@@ -241,6 +269,22 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
         setDuplicateGroups(data.duplicateGroups);
       }
 
+      // Register with global migration context
+      registerJob({
+        jobId: existingJobId,
+        tabType: 'cleanup',
+        status: data.status as MigrationJobStatus,
+        startedAt: new Date(data.startedAt),
+        progress: data.progress ? {
+          total: data.progress.total,
+          processed: data.progress.processed,
+          successful: data.progress.successful,
+          failed: data.progress.failed,
+          percent: data.progress.percent
+        } : undefined,
+        description: `Cleanup job ${existingJobId}`
+      });
+
       // Start polling if job is still in progress
       if (
         data.status === 'planning' ||
@@ -267,7 +311,10 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
     setIsCreating(false);
     setIsExecuting(false);
     setError(null);
-  }, [stopPolling]);
+
+    // Unregister from global context
+    unregisterJob('cleanup');
+  }, [stopPolling, unregisterJob]);
 
   return {
     // State

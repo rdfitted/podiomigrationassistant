@@ -7,9 +7,23 @@ import { FlowClonePanel } from './FlowClonePanel';
 import { ItemMigrationPanel } from './ItemMigrationPanel';
 import { CleanupPanel } from './CleanupPanel';
 import { TabContainer, MigrationTabType } from './TabContainer';
+import { RateLimitBanner } from './RateLimitBanner';
+import { useMigrationContext } from '@/app/contexts/MigrationContext';
+import { useRateLimitStatus } from '@/app/hooks/useRateLimitStatus';
+import type { MigrationTabType as ContextMigrationTabType } from '@/app/contexts/MigrationContext';
 
 export interface MigrationSelectionPanelProps {
   onSelectionChange?: (state: MigrationSelectionState) => void;
+}
+
+// Map UI tab types to context migration types
+function mapTabToMigrationType(tab: MigrationTabType): ContextMigrationTabType {
+  const mapping: Record<MigrationTabType, ContextMigrationTabType> = {
+    flows: 'flow_clone',
+    items: 'item_migration',
+    cleanup: 'cleanup'
+  };
+  return mapping[tab];
 }
 
 /**
@@ -17,12 +31,24 @@ export interface MigrationSelectionPanelProps {
  * Displays source and destination selection columns
  */
 export function MigrationSelectionPanel({ onSelectionChange }: MigrationSelectionPanelProps) {
+  // Migration context for tracking active jobs
+  const { setCurrentTab, getActiveJob } = useMigrationContext();
+
+  // Rate limit monitoring
+  useRateLimitStatus({ enabled: true, adaptivePolling: true });
+
   // Tab state
   const [activeTab, setActiveTab] = useState<MigrationTabType>('items');
 
   // Badge counts for tabs
   const [flowsCount, setFlowsCount] = useState<number | undefined>(undefined);
   const [itemsCount, setItemsCount] = useState<number | undefined>(undefined);
+
+  // Update context when tab changes
+  const handleTabChange = (tab: MigrationTabType) => {
+    setActiveTab(tab);
+    setCurrentTab(mapTabToMigrationType(tab));
+  };
 
   const {
     source,
@@ -241,14 +267,46 @@ export function MigrationSelectionPanel({ onSelectionChange }: MigrationSelectio
           </div>
         )}
 
+        {/* Rate Limit Banner */}
+        <RateLimitBanner />
+
         {/* Tabbed Migration Tools */}
         <TabContainer
           activeTab={activeTab}
-          onTabChange={setActiveTab}
+          onTabChange={handleTabChange}
           tabs={[
-            { id: 'flows', label: 'Flow Migration', badge: flowsCount },
-            { id: 'items', label: 'Item Migration', badge: itemsCount },
-            { id: 'cleanup', label: 'Duplicate Cleanup' },
+            {
+              id: 'flows',
+              label: 'Flow Migration',
+              badge: flowsCount,
+              icon: getActiveJob('flow_clone') ? (
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                </span>
+              ) : undefined
+            },
+            {
+              id: 'items',
+              label: 'Item Migration',
+              badge: itemsCount,
+              icon: getActiveJob('item_migration') ? (
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                </span>
+              ) : undefined
+            },
+            {
+              id: 'cleanup',
+              label: 'Duplicate Cleanup',
+              icon: getActiveJob('cleanup') ? (
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                </span>
+              ) : undefined
+            },
           ]}
         >
           {activeTab === 'flows' && (
