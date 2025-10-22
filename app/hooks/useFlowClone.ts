@@ -6,11 +6,16 @@ import {
   FlowCloneRequest,
   FlowCloneJobStatusResponse,
 } from '@/lib/globiflow/types';
+import { useMigrationContext } from '@/app/contexts/MigrationContext';
+import type { MigrationJobStatus } from '@/app/contexts/MigrationContext';
 
 /**
  * Hook for managing flow clone operations
  */
 export function useFlowClone(sourceAppId?: number, targetAppId?: number) {
+  // Get migration context
+  const { registerJob, unregisterJob, updateJobProgress, updateJobStatus } = useMigrationContext();
+
   const [flows, setFlows] = useState<FlowSummary[]>([]);
   const [flowsLoading, setFlowsLoading] = useState(false);
   const [flowsError, setFlowsError] = useState<string | null>(null);
@@ -121,6 +126,15 @@ export function useFlowClone(sourceAppId?: number, targetAppId?: number) {
       setCurrentJobId(data.data.jobId);
       startPollingJobStatus(data.data.jobId);
 
+      // Register with global migration context
+      registerJob({
+        jobId: data.data.jobId,
+        tabType: 'flow_clone',
+        status: 'planning',
+        startedAt: new Date(),
+        description: `Cloning ${selectedFlowIds.size} flows from app ${sourceAppId} to ${targetAppId}`
+      });
+
       // Clear selection
       setSelectedFlowIds(new Set());
     } catch (error) {
@@ -129,7 +143,7 @@ export function useFlowClone(sourceAppId?: number, targetAppId?: number) {
     } finally {
       setCloning(false);
     }
-  }, [sourceAppId, targetAppId, selectedFlowIds]);
+  }, [sourceAppId, targetAppId, selectedFlowIds, registerJob]);
 
   /**
    * Stop polling job status
@@ -155,6 +169,25 @@ export function useFlowClone(sourceAppId?: number, targetAppId?: number) {
 
       setJobStatus(data.data);
 
+      // Update global context with progress
+      if (data.data.results) {
+        const total = data.data.results.length;
+        const successful = data.data.results.filter((r: any) => r.success).length;
+        const failed = data.data.results.filter((r: any) => !r.success).length;
+        const processed = successful + failed;
+
+        updateJobProgress('flow_clone', {
+          total,
+          processed,
+          successful,
+          failed,
+          percent: total > 0 ? Math.round((processed / total) * 100) : 0
+        });
+      }
+
+      // Update global context with status
+      updateJobStatus('flow_clone', data.data.status as MigrationJobStatus);
+
       // Stop polling if job is complete or failed
       if (data.data.status === 'completed' || data.data.status === 'failed') {
         stopPollingJobStatus();
@@ -163,7 +196,7 @@ export function useFlowClone(sourceAppId?: number, targetAppId?: number) {
       console.error('Error polling job status:', error);
       stopPollingJobStatus();
     }
-  }, [stopPollingJobStatus]);
+  }, [stopPollingJobStatus, updateJobProgress, updateJobStatus]);
 
   /**
    * Start polling job status
@@ -193,7 +226,10 @@ export function useFlowClone(sourceAppId?: number, targetAppId?: number) {
     stopPollingJobStatus();
     setCurrentJobId(null);
     setJobStatus(null);
-  }, [stopPollingJobStatus]);
+
+    // Unregister from global context
+    unregisterJob('flow_clone');
+  }, [stopPollingJobStatus, unregisterJob]);
 
   /**
    * Load flows when source app changes
