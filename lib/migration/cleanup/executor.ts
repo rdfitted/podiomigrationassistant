@@ -209,10 +209,7 @@ export class CleanupExecutor extends EventEmitter {
       const result = await this.deleteDuplicates(groupsToProcess);
 
       // Update final status
-      await migrationStateStore.updateJobStatus(
-        this.jobId,
-        result.failedDeletions > 0 ? 'completed' : 'completed'
-      );
+      await migrationStateStore.updateJobStatus(this.jobId, 'completed');
 
       this.emit('complete', result);
       return result;

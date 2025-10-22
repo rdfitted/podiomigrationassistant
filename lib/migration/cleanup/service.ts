@@ -48,7 +48,7 @@ const INVALID_MATCH_FIELD_TYPES = [
  */
 function validateMatchFieldType(fieldType: string, fieldLabel: string): void {
   if (INVALID_MATCH_FIELD_TYPES.includes(fieldType)) {
-    throw new Error(
+    throw new CleanupValidationError(
       `Invalid match field type: "${fieldLabel}" is a ${fieldType} field. ` +
       `${fieldType.charAt(0).toUpperCase() + fieldType.slice(1)} fields cannot be used for matching because ` +
       `they contain IDs or complex objects that aren't portable. ` +
