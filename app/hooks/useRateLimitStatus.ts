@@ -54,6 +54,7 @@ export function useRateLimitStatus(options: UseRateLimitStatusOptions = {}) {
   const { updateRateLimitInfo, hasActiveJobs } = useMigrationContext();
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
   const mountedRef = useRef<boolean>(true);
+  const errorCountRef = useRef<number>(0);
 
   const fetchStatus = useCallback(async () => {
     if (!mountedRef.current) return;
@@ -69,7 +70,17 @@ export function useRateLimitStatus(options: UseRateLimitStatusOptions = {}) {
 
       const data: RateLimitStatus = await response.json();
 
+      // Validate critical fields
+      if (typeof data.hasData !== 'boolean' ||
+          (data.limit !== null && typeof data.limit !== 'number') ||
+          (data.remaining !== null && typeof data.remaining !== 'number')) {
+        throw new Error('Invalid rate limit status response format');
+      }
+
       if (!mountedRef.current) return;
+
+      // Reset error count on successful fetch
+      errorCountRef.current = 0;
 
       setStatus(data);
 
@@ -86,6 +97,7 @@ export function useRateLimitStatus(options: UseRateLimitStatusOptions = {}) {
     } catch (err) {
       if (!mountedRef.current) return;
 
+      errorCountRef.current++;
       const error = err instanceof Error ? err : new Error(String(err));
       setError(error);
       console.error('Failed to fetch rate limit status:', error);
@@ -123,6 +135,11 @@ export function useRateLimitStatus(options: UseRateLimitStatusOptions = {}) {
         } else if (hasActiveJobs()) {
           interval = 3000;
         }
+      }
+
+      // Apply exponential backoff if there have been errors
+      if (errorCountRef.current > 0) {
+        interval = Math.min(interval * Math.pow(2, errorCountRef.current), 60000);
       }
 
       timeoutRef.current = setTimeout(() => {

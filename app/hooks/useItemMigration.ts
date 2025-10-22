@@ -116,7 +116,7 @@ export function useItemMigration(options: UseItemMigrationOptions = {}): UseItem
         setIsCreating(false);
       }
     },
-    [sourceAppId, targetAppId, fieldMappingOverride]
+    [sourceAppId, targetAppId, fieldMappingOverride, registerJob]
   );
 
   /**
@@ -160,7 +160,7 @@ export function useItemMigration(options: UseItemMigrationOptions = {}): UseItem
       setError(err instanceof Error ? err.message : 'Failed to poll job status');
       setIsPolling(false);
     }
-  }, []);
+  }, [updateJobProgress, updateJobStatus]);
 
   /**
    * Start polling when jobId is set
@@ -242,7 +242,7 @@ export function useItemMigration(options: UseItemMigrationOptions = {}): UseItem
     } finally {
       setIsCreating(false);
     }
-  }, []);
+  }, [registerJob]);
 
   /**
    * Retry failed items from a migration job

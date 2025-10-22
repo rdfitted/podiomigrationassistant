@@ -104,7 +104,7 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
         setIsCreating(false);
       }
     },
-    [appId]
+    [appId, registerJob]
   );
 
   /**
@@ -205,7 +205,7 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
       setError(err instanceof Error ? err.message : 'Failed to poll job status');
       setIsPolling(false);
     }
-  }, []);
+  }, [updateJobProgress, updateJobStatus]);
 
   /**
    * Start polling when jobId is set
@@ -295,10 +295,10 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load cleanup job');
-    } finally {
+    } finally{
       setIsCreating(false);
     }
-  }, []);
+  }, [registerJob]);
 
   /**
    * Reset hook state

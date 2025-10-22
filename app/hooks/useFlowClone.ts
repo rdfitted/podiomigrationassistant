@@ -143,7 +143,7 @@ export function useFlowClone(sourceAppId?: number, targetAppId?: number) {
     } finally {
       setCloning(false);
     }
-  }, [sourceAppId, targetAppId, selectedFlowIds]);
+  }, [sourceAppId, targetAppId, selectedFlowIds, registerJob]);
 
   /**
    * Stop polling job status
@@ -196,7 +196,7 @@ export function useFlowClone(sourceAppId?: number, targetAppId?: number) {
       console.error('Error polling job status:', error);
       stopPollingJobStatus();
     }
-  }, [stopPollingJobStatus]);
+  }, [stopPollingJobStatus, updateJobProgress, updateJobStatus]);
 
   /**
    * Start polling job status
