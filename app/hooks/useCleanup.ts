@@ -189,10 +189,11 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
       // Update global context with status
       updateJobStatus('cleanup', data.status as MigrationJobStatus);
 
-      // Stop polling if job is completed, failed, or waiting for approval
+      // Stop polling if job is completed, failed, cancelled, or waiting for approval
       if (
         data.status === 'completed' ||
         data.status === 'failed' ||
+        data.status === 'cancelled' ||
         data.status === 'waiting_approval'
       ) {
         setIsPolling(false);

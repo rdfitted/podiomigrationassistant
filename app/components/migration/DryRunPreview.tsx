@@ -149,7 +149,7 @@ export function DryRunPreview({ preview, onExecute, onReset }: DryRunPreviewProp
 
           <div className="bg-white dark:bg-gray-800 rounded-md p-4 border border-green-200 dark:border-green-700">
             <div className="text-2xl font-bold text-green-600 dark:text-green-400">
-              {mode === 'create' ? summary.wouldCreateCount : summary.wouldUpdateCount}
+              {mode === 'create' ? (summary.wouldCreateCount ?? 0) : (summary.wouldUpdateCount ?? 0)}
             </div>
             <div className="text-sm text-gray-600 dark:text-gray-400">
               {mode === 'create' ? 'Would Create' : 'Would Update'}
