@@ -219,17 +219,16 @@ export class CleanupExecutor extends EventEmitter {
   private async loadAllItems(): Promise<any[]> {
     const items: any[] = [];
 
-    await streamItems(this.client, this.config.appId, {
-      limit: 500,
-      onItems: (batch) => {
-        items.push(...batch);
-        logger.debug('Items batch loaded', {
-          jobId: this.jobId,
-          batchSize: batch.length,
-          totalLoaded: items.length,
-        });
-      },
-    });
+    for await (const batch of streamItems(this.client, this.config.appId, {
+      batchSize: 500,
+    })) {
+      items.push(...batch);
+      logger.debug('Items batch loaded', {
+        jobId: this.jobId,
+        batchSize: batch.length,
+        totalLoaded: items.length,
+      });
+    }
 
     return items;
   }
