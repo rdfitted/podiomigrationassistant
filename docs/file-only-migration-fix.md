@@ -81,11 +81,20 @@ if (isFileOnlyMigration) {
 
 3. **File Transfer**: Proceeds as normal with all items in the "successful" list
 
+4. **Failure Tracking** (NEW): If file transfers fail in file-only mode:
+   - Track each file transfer failure
+   - Adjust success/failure stats to reflect transfer failures
+   - Emit `itemFailed` events for each transfer failure
+   - Remove failed transfers from successful list
+   - Add detailed error to `failedItems` array
+   - Log warning with failure count
+
 ## Impact
 
 - **Before**: 100% failure rate for file-only migrations (0/248 succeeded)
 - **After**: File-only migrations succeed (files transferred without field updates)
 - **Normal migrations**: Unchanged behavior (still updates fields as before)
+- **Failure Reporting**: File transfer failures now properly reflected in success/failure stats (not hidden as warnings)
 
 ## Testing
 

@@ -452,6 +452,10 @@ export class ItemBatchProcessor extends EventEmitter {
               typeof update.sourceItemId === 'number' && successfulItemIds.has(update.itemId)
           );
 
+          // Track file transfer failures for file-only migrations
+          let transferFailureCount = 0;
+          const transferFailures: Array<{ sourceItemId: number; targetItemId: number; error: string }> = [];
+
           if (transferCandidates.length > 0) {
             migrationLogger.info('Transferring files for updated items', {
               batchNumber: batchNum + 1,
@@ -484,10 +488,19 @@ export class ItemBatchProcessor extends EventEmitter {
                 const update = transferBatch[idx];
                 if (result.status === 'rejected') {
                   const error = result.reason;
+                  const errorMessage = error instanceof Error ? error.message : String(error);
+
                   migrationLogger.warn('Failed to transfer files for item', {
                     sourceItemId: update.sourceItemId,
                     targetItemId: update.itemId,
-                    error: error instanceof Error ? error.message : String(error),
+                    error: errorMessage,
+                  });
+
+                  transferFailureCount++;
+                  transferFailures.push({
+                    sourceItemId: update.sourceItemId,
+                    targetItemId: update.itemId,
+                    error: errorMessage,
                   });
                 }
               });
@@ -495,6 +508,55 @@ export class ItemBatchProcessor extends EventEmitter {
           } else {
             migrationLogger.info('No eligible items for file transfer in batch', {
               batchNumber: batchNum + 1,
+            });
+          }
+
+          // If this was a file-only batch, reflect transfer failures in stats/results
+          if (isFileOnlyMigration && transferFailureCount > 0) {
+            migrationLogger.warn('File-only migration had transfer failures', {
+              batchNumber: batchNum + 1,
+              transferFailureCount,
+              totalBatchItems: batch.length,
+            });
+
+            // Adjust stats to reflect file transfer failures
+            this.stats.successful -= transferFailureCount;
+            this.stats.failed += transferFailureCount;
+            result.successful -= transferFailureCount;
+            result.failed += transferFailureCount;
+
+            // Update batchResult to mark these items as failed
+            transferFailures.forEach(({ sourceItemId, targetItemId, error }) => {
+              // Remove from successful list
+              const successIdx = batchResult.successful.findIndex(s => s.itemId === targetItemId);
+              if (successIdx >= 0) {
+                batchResult.successful.splice(successIdx, 1);
+                batchResult.successCount--;
+              }
+
+              // Find the item in the batch to get its index
+              const batchIdx = batch.findIndex(u => u.itemId === targetItemId);
+              const globalIndex = batchIdx >= 0 ? start + batchIdx : start;
+
+              // Emit itemFailed event
+              this.emit('itemFailed', globalIndex, error, false);
+
+              // Add to failed items in result
+              result.failedItems.push({
+                index: globalIndex,
+                error: `File transfer failed: ${error}`,
+                data: { itemId: targetItemId, fields: {} },
+                sourceItemId,
+              });
+
+              // Add to batchResult.failed
+              batchResult.failed.push({
+                itemId: targetItemId,
+                fields: {},
+                error: `File transfer failed: ${error}`,
+                index: batchIdx >= 0 ? batchIdx : 0,
+              });
+              batchResult.failureCount++;
             });
           }
         }
