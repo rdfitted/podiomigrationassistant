@@ -1190,6 +1190,19 @@ export class ItemMigrator {
                   };
                   result.failedItems.push(failedMatch);
 
+                  // Save to state store (non-dry-run only)
+                  if (!config.dryRun) {
+                    await migrationStateStore.addFailedItem(migrationJob.id, {
+                      sourceItemId: sourceItem.item_id,
+                      targetItemId: undefined,
+                      error: `No matching item found for ${sourceMatchField}=${matchValue}`,
+                      errorCategory: 'validation',
+                      attemptCount: 1,
+                      firstAttemptAt: new Date(),
+                      lastAttemptAt: new Date(),
+                    });
+                  }
+
                   // Dry-run mode: capture failed match info
                   if (config.dryRun) {
                     dryRunFailedMatches.push({
@@ -1213,6 +1226,19 @@ export class ItemMigrator {
                   index: result.failedItems.length,
                 };
                 result.failedItems.push(failedMatch);
+
+                // Save to state store (non-dry-run only)
+                if (!config.dryRun) {
+                  await migrationStateStore.addFailedItem(migrationJob.id, {
+                    sourceItemId: sourceItem.item_id,
+                    targetItemId: undefined,
+                    error: `Source match field '${sourceMatchField}' not found in item`,
+                    errorCategory: 'validation',
+                    attemptCount: 1,
+                    firstAttemptAt: new Date(),
+                    lastAttemptAt: new Date(),
+                  });
+                }
 
                 // Dry-run mode: capture failed match info
                 if (config.dryRun) {

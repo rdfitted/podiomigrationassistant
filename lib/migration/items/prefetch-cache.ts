@@ -120,7 +120,7 @@ interface CacheEntry<T> {
  * Cache configuration
  */
 export interface CacheConfig {
-  ttlMs: number; // Time to live in milliseconds (default: 30 minutes)
+  ttlMs: number; // Time to live in milliseconds (default: 12 hours for long migrations)
   maxSize?: number; // Optional max cache size
 }
 
@@ -162,7 +162,7 @@ export class PrefetchCache {
 
   constructor(config?: Partial<CacheConfig>) {
     this.config = {
-      ttlMs: config?.ttlMs ?? 1800000, // Default: 30 minutes
+      ttlMs: config?.ttlMs ?? 43200000, // Default: 12 hours (sufficient for very long migrations)
       maxSize: config?.maxSize,
     };
   }
