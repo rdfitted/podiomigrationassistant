@@ -4,14 +4,14 @@
  * This script repairs corrupted migration files by:
  * 1. Loading the file up to the corruption point
  * 2. Attempting to parse partial JSON
- * 3. Reconstructing the migration state with limited failedItems
- * 4. Saving the cleaned version
+ * 3. Reconstructing the migration state with all available data
+ * 4. Saving the cleaned version with proper verification
  *
  * Usage:
  *   npx ts-node scripts/cleanup-corrupted-migration.ts <jobId>
  *
  * Example:
- *   npx ts-node scripts/cleanup-corrupted-migration.ts 8c408749-5445-4880-b1be-003aeee885e9
+ *   npx ts-node scripts/cleanup-corrupted-migration.ts 7611bccb-a911-42fe-8948-fac18e23fad6
  */
 
 import { promises as fs } from 'fs';
@@ -48,28 +48,8 @@ async function cleanupCorruptedMigration(jobId: string) {
       job = JSON.parse(fileContent);
       console.log('✅ File is actually valid JSON! No corruption detected.');
       console.log(`   Failed items: ${job.progress?.failedItems?.length || 0}`);
-
-      if (job.progress?.failedItems?.length > 10000) {
-        console.log(`\n⚠️  Warning: File has ${job.progress.failedItems.length} failed items.`);
-        console.log('   Trimming to most recent 10,000 items to prevent future issues...');
-
-        // Keep only most recent 10,000
-        const removed = job.progress.failedItems.length - 10000;
-        job.progress.failedItems = job.progress.failedItems.slice(-10000);
-
-        // Create backup
-        console.log(`\n💾 Creating backup: ${backupPath}`);
-        await fs.copyFile(filePath, backupPath);
-
-        // Save cleaned version
-        console.log('💾 Saving cleaned version...');
-        await fs.writeFile(filePath, JSON.stringify(job, null, 2), 'utf-8');
-
-        console.log(`\n✅ Success! Removed ${removed.toLocaleString()} oldest failed items.`);
-        console.log(`   Backup saved to: ${backupPath}`);
-      } else {
-        console.log('   No action needed - file is healthy.');
-      }
+      console.log(`   Batch checkpoints: ${job.progress?.batchCheckpoints?.length || 0}`);
+      console.log('   No action needed - file is healthy.');
 
       return;
     } catch (parseError: any) {
@@ -112,13 +92,7 @@ async function cleanupCorruptedMigration(jobId: string) {
     console.log(`   Status: ${validJson.status}`);
     console.log(`   Progress: ${validJson.progress?.processed || 0} / ${validJson.progress?.total || 0}`);
     console.log(`   Failed items in recovered state: ${validJson.progress?.failedItems?.length || 0}`);
-
-    // Trim failed items to prevent future issues
-    if (validJson.progress?.failedItems?.length > 10000) {
-      const removed = validJson.progress.failedItems.length - 10000;
-      validJson.progress.failedItems = validJson.progress.failedItems.slice(-10000);
-      console.log(`\n⚠️  Trimmed failed items array from ${removed + 10000} to 10,000 items`);
-    }
+    console.log(`   Batch checkpoints in recovered state: ${validJson.progress?.batchCheckpoints?.length || 0}`);
 
     // Create backup of corrupted file
     console.log(`\n💾 Creating backup of corrupted file: ${backupPath}`);

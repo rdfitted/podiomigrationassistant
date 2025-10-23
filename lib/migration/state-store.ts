@@ -199,51 +199,112 @@ export class MigrationStateStore {
   }
 
   /**
-   * Save migration job to disk with atomic write
+   * Save migration job to disk with atomic write, verification, and retry
    */
   async saveMigrationJob(job: MigrationJob): Promise<void> {
     const jobPath = this.getJobPath(job.id);
     const tempPath = `${jobPath}.tmp`;
+    const MAX_RETRIES = 3;
+    let lastError: Error | null = null;
 
-    try {
-      // Ensure directory exists
-      await fs.mkdir(this.storePath, { recursive: true });
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        // Ensure directory exists
+        await fs.mkdir(this.storePath, { recursive: true });
 
-      // Write to temp file first
-      await fs.writeFile(tempPath, JSON.stringify(job, null, 2), 'utf-8');
+        // Serialize to JSON
+        const jsonContent = JSON.stringify(job, null, 2);
 
-      // Atomic rename
-      await fs.rename(tempPath, jobPath);
+        // Write to temp file
+        await fs.writeFile(tempPath, jsonContent, 'utf-8');
 
-      logger.debug('Saved migration job', { jobId: job.id });
-    } catch (error) {
-      // Handle race condition: if temp file doesn't exist, it might have been
-      // renamed by a concurrent save operation. Check if final file exists.
-      const isRenameError = (error as NodeJS.ErrnoException).code === 'ENOENT' &&
-                           (error as NodeJS.ErrnoException).syscall === 'rename';
-
-      if (isRenameError) {
+        // Force flush to disk (fsync)
+        const fileHandle = await fs.open(tempPath, 'r+');
         try {
-          // Check if final file exists (concurrent save succeeded)
-          await fs.access(jobPath);
-          logger.debug('Saved migration job (concurrent save detected)', { jobId: job.id });
-          return; // Final file exists, consider this a success
-        } catch {
-          // Final file doesn't exist either, this is a real error
+          await fileHandle.sync();
+        } finally {
+          await fileHandle.close();
+        }
+
+        // Verify write by reading back and parsing
+        const writtenContent = await fs.readFile(tempPath, 'utf-8');
+        try {
+          JSON.parse(writtenContent); // Validate JSON structure
+        } catch (parseError) {
+          throw new Error(`Write verification failed: Invalid JSON in temp file - ${parseError}`);
+        }
+
+        // Verify content matches (length check for performance)
+        if (writtenContent.length !== jsonContent.length) {
+          throw new Error(`Write verification failed: Size mismatch (expected ${jsonContent.length}, got ${writtenContent.length})`);
+        }
+
+        // Atomic rename (only after verification passes)
+        await fs.rename(tempPath, jobPath);
+
+        logger.debug('Saved migration job', {
+          jobId: job.id,
+          sizeBytes: jsonContent.length,
+          attempt: attempt > 1 ? attempt : undefined,
+        });
+
+        return; // Success!
+      } catch (error) {
+        lastError = error as Error;
+
+        // Handle race condition: if temp file doesn't exist, it might have been
+        // renamed by a concurrent save operation. Check if final file exists.
+        const isRenameError = (error as NodeJS.ErrnoException).code === 'ENOENT' &&
+                             (error as NodeJS.ErrnoException).syscall === 'rename';
+
+        if (isRenameError) {
+          try {
+            // Check if final file exists (concurrent save succeeded)
+            await fs.access(jobPath);
+            logger.debug('Saved migration job (concurrent save detected)', { jobId: job.id });
+            return; // Final file exists, consider this a success
+          } catch {
+            // Final file doesn't exist either, this is a real error
+          }
+        }
+
+        // Log retry attempt
+        if (attempt < MAX_RETRIES) {
+          logger.warn('Failed to save migration job, retrying', {
+            jobId: job.id,
+            attempt,
+            maxRetries: MAX_RETRIES,
+            error: lastError.message,
+          });
+
+          // Clean up temp file before retry
+          try {
+            await fs.unlink(tempPath);
+          } catch {
+            // Ignore cleanup errors
+          }
+
+          // Wait before retry (exponential backoff: 100ms, 200ms, 400ms)
+          await new Promise(resolve => setTimeout(resolve, 100 * Math.pow(2, attempt - 1)));
         }
       }
-
-      logger.error('Failed to save migration job', { jobId: job.id, error });
-
-      // Clean up temp file if it exists
-      try {
-        await fs.unlink(tempPath);
-      } catch {
-        // Ignore cleanup errors
-      }
-
-      throw error;
     }
+
+    // All retries failed
+    logger.error('Failed to save migration job after all retries', {
+      jobId: job.id,
+      attempts: MAX_RETRIES,
+      error: lastError,
+    });
+
+    // Clean up temp file
+    try {
+      await fs.unlink(tempPath);
+    } catch {
+      // Ignore cleanup errors
+    }
+
+    throw lastError || new Error('Failed to save migration job');
   }
 
   /**
@@ -556,7 +617,6 @@ export class MigrationStateStore {
 
   /**
    * Add a failed item to the migration
-   * Limits failedItems array to most recent 10,000 items to prevent file corruption
    */
   async addFailedItem(
     jobId: string,
@@ -593,22 +653,6 @@ export class MigrationStateStore {
     } else {
       // Add new failed item
       job.progress.failedItems.push(failedItem);
-
-      // CRITICAL FIX: Limit failedItems array to prevent file corruption
-      // Keep only the most recent 10,000 failed items
-      const MAX_FAILED_ITEMS = 10000;
-      if (job.progress.failedItems.length > MAX_FAILED_ITEMS) {
-        // Remove oldest items (FIFO)
-        const itemsToRemove = job.progress.failedItems.length - MAX_FAILED_ITEMS;
-        job.progress.failedItems.splice(0, itemsToRemove);
-
-        logger.warn('Failed items array exceeded limit, removed oldest items', {
-          jobId,
-          totalFailedItems: job.progress.failed, // Keep the counter accurate
-          itemsInArray: job.progress.failedItems.length,
-          itemsRemoved: itemsToRemove,
-        });
-      }
     }
 
     await this.saveMigrationJob(job);
