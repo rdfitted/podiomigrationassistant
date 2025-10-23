@@ -15,10 +15,18 @@ export const runtime = 'nodejs';
 
 /**
  * GET /api/migration/items
- * List all migration jobs
+ * List all migration jobs with pagination
+ * Query params:
+ * - limit: number of migrations to return (default: 10)
+ * - skip: number of migrations to skip (default: 0)
  */
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    // Parse query params
+    const searchParams = request.nextUrl.searchParams;
+    const limit = parseInt(searchParams.get('limit') || '10');
+    const skip = parseInt(searchParams.get('skip') || '0');
+
     const jobs = await migrationStateStore.listMigrationJobs();
 
     // Filter to only item migrations and sort by start time (newest first)
@@ -30,7 +38,12 @@ export async function GET() {
         (job.metadata as any)?.jobType === 'item_migration' ||
         (!job.jobType && !(job.metadata as any)?.jobType)
       )
-      .sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime())
+      .sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime());
+
+    // Apply pagination
+    const total = itemMigrations.length;
+    const paginatedMigrations = itemMigrations
+      .slice(skip, skip + limit)
       .map((job) => ({
         id: job.id,
         status: job.status,
@@ -44,8 +57,11 @@ export async function GET() {
 
     return NextResponse.json(
       {
-        migrations: itemMigrations,
-        total: itemMigrations.length,
+        migrations: paginatedMigrations,
+        total: total,
+        limit: limit,
+        skip: skip,
+        hasMore: skip + limit < total,
       },
       { status: 200 }
     );

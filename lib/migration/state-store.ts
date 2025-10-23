@@ -556,6 +556,7 @@ export class MigrationStateStore {
 
   /**
    * Add a failed item to the migration
+   * Limits failedItems array to most recent 10,000 items to prevent file corruption
    */
   async addFailedItem(
     jobId: string,
@@ -592,6 +593,22 @@ export class MigrationStateStore {
     } else {
       // Add new failed item
       job.progress.failedItems.push(failedItem);
+
+      // CRITICAL FIX: Limit failedItems array to prevent file corruption
+      // Keep only the most recent 10,000 failed items
+      const MAX_FAILED_ITEMS = 10000;
+      if (job.progress.failedItems.length > MAX_FAILED_ITEMS) {
+        // Remove oldest items (FIFO)
+        const itemsToRemove = job.progress.failedItems.length - MAX_FAILED_ITEMS;
+        job.progress.failedItems.splice(0, itemsToRemove);
+
+        logger.warn('Failed items array exceeded limit, removed oldest items', {
+          jobId,
+          totalFailedItems: job.progress.failed, // Keep the counter accurate
+          itemsInArray: job.progress.failedItems.length,
+          itemsRemoved: itemsToRemove,
+        });
+      }
     }
 
     await this.saveMigrationJob(job);

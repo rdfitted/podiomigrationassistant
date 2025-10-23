@@ -758,6 +758,7 @@ export class ItemMigrator {
       let skippedCount = 0;
       let updatedDuplicatesCount = 0;
       const maxItems = config.maxItems || Infinity;
+      let maxItemsReached = false; // Flag to signal outer loop to stop
 
       // Determine if this is a retry operation FIRST
       const isRetry = config.retryItemIds && config.retryItemIds.length > 0;
@@ -852,6 +853,16 @@ export class ItemMigrator {
 
           // Map items using field mapping
           for (const sourceItem of batch) {
+            // Check if we've reached the max items limit (retry mode)
+            if (itemsToCreate.length >= maxItems) {
+              migrationLogger.info('Reached maxItems limit in retry mode, stopping', {
+                maxItems,
+                collected: itemsToCreate.length,
+              });
+              maxItemsReached = true; // Set flag to stop outer loop
+              break;
+            }
+
             const mappedFields = mapItemFields(sourceItem, externalIdFieldMapping);
 
             // For retry mode, simply recreate the items without duplicate detection
@@ -860,6 +871,15 @@ export class ItemMigrator {
               fields: mappedFields,
               external_id: `migrated-${sourceItem.item_id}`,
             });
+          }
+
+          // Stop processing retry batches if we've reached the limit
+          if (maxItemsReached) {
+            migrationLogger.info('Stopping retry mode - maxItems limit reached', {
+              maxItems,
+              collected: itemsToCreate.length,
+            });
+            break;
           }
 
         }
@@ -892,6 +912,7 @@ export class ItemMigrator {
                 maxItems,
                 collected: itemsToCreate.length + itemsToUpdate.length,
               });
+              maxItemsReached = true; // Set flag to stop outer loop
               break;
             }
 
@@ -1206,7 +1227,11 @@ export class ItemMigrator {
           }
 
           // Stop streaming if we've reached the limit
-          if (itemsToCreate.length + itemsToUpdate.length >= maxItems) {
+          if (maxItemsReached) {
+            migrationLogger.info('Stopping outer loop - maxItems limit reached', {
+              maxItems,
+              collected: itemsToCreate.length + itemsToUpdate.length,
+            });
             break;
           }
 

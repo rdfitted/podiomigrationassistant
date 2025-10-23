@@ -49,6 +49,10 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
   const [showPastMigrations, setShowPastMigrations] = useState(false);
   const [pastMigrations, setPastMigrations] = useState<MigrationListItem[]>([]);
   const [isLoadingMigrations, setIsLoadingMigrations] = useState(false);
+  const [migrationsPage, setMigrationsPage] = useState(0);
+  const [migrationsTotalCount, setMigrationsTotalCount] = useState(0);
+  const [migrationsHasMore, setMigrationsHasMore] = useState(false);
+  const MIGRATIONS_PER_PAGE = 10;
 
   // Field structures for dropdowns
   const [sourceFields, setSourceFields] = useState<AppFieldInfo[]>([]);
@@ -130,17 +134,20 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
     loadFields();
   }, [sourceAppId, targetAppId]);
 
-  // Fetch past migrations when component mounts or when past migrations panel is opened
+  // Fetch past migrations when component mounts, when panel is opened, or when page changes
   useEffect(() => {
     async function loadPastMigrations() {
       if (!showPastMigrations) return;
 
       setIsLoadingMigrations(true);
       try {
-        const response = await fetch('/api/migration/items');
+        const skip = migrationsPage * MIGRATIONS_PER_PAGE;
+        const response = await fetch(`/api/migration/items?limit=${MIGRATIONS_PER_PAGE}&skip=${skip}`);
         if (response.ok) {
           const data = await response.json();
           setPastMigrations(data.migrations || []);
+          setMigrationsTotalCount(data.total || 0);
+          setMigrationsHasMore(data.hasMore || false);
         }
       } catch (err) {
         console.error('Failed to load past migrations:', err);
@@ -150,6 +157,13 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
     }
 
     loadPastMigrations();
+  }, [showPastMigrations, migrationsPage, MIGRATIONS_PER_PAGE]);
+
+  // Reset page when panel is toggled open
+  useEffect(() => {
+    if (showPastMigrations) {
+      setMigrationsPage(0);
+    }
   }, [showPastMigrations]);
 
   const handleLoadMigration = async (migrationId: string) => {
@@ -294,9 +308,9 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
               <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
                 Past Migrations
               </span>
-              {pastMigrations.length > 0 && (
+              {migrationsTotalCount > 0 && (
                 <span className="text-xs bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 px-2 py-0.5 rounded">
-                  {pastMigrations.length}
+                  {migrationsTotalCount}
                 </span>
               )}
             </div>
@@ -321,37 +335,72 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
                   No past migrations found
                 </div>
               ) : (
-                <div className="space-y-2">
-                  {pastMigrations.map((migration) => (
-                    <div
-                      key={migration.id}
-                      className="p-3 border border-gray-200 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer"
-                      onClick={() => handleLoadMigration(migration.id)}
-                    >
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          <StatusBadge status={migration.status} />
-                          <span className="text-xs text-gray-500 dark:text-gray-400">
-                            {new Date(migration.startedAt).toLocaleString()}
-                          </span>
+                <>
+                  <div className="space-y-2">
+                    {pastMigrations.map((migration) => (
+                      <div
+                        key={migration.id}
+                        className="p-3 border border-gray-200 dark:border-gray-600 rounded-md"
+                      >
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2">
+                            <StatusBadge status={migration.status} />
+                            <span className="text-xs text-gray-500 dark:text-gray-400">
+                              {new Date(migration.startedAt).toLocaleString()}
+                            </span>
+                          </div>
+                          {migration.progress && (
+                            <span className="text-xs font-medium text-gray-700 dark:text-gray-300">
+                              {migration.progress.processed} / {migration.progress.total} items
+                            </span>
+                          )}
                         </div>
                         {migration.progress && (
-                          <span className="text-xs font-medium text-gray-700 dark:text-gray-300">
-                            {migration.progress.processed} / {migration.progress.total} items
-                          </span>
+                          <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5 mb-2">
+                            <div
+                              className="bg-blue-600 h-1.5 rounded-full transition-all"
+                              style={{ width: `${migration.progress.percent}%` }}
+                            />
+                          </div>
                         )}
+                        {/* Action buttons */}
+                        <PastMigrationActions
+                          migration={migration}
+                          onView={() => handleLoadMigration(migration.id)}
+                          onActionComplete={() => {
+                            // Reload migrations list after action
+                            setMigrationsPage(0);
+                          }}
+                        />
                       </div>
-                      {migration.progress && (
-                        <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5">
-                          <div
-                            className="bg-blue-600 h-1.5 rounded-full transition-all"
-                            style={{ width: `${migration.progress.percent}%` }}
-                          />
-                        </div>
-                      )}
+                    ))}
+                  </div>
+
+                  {/* Pagination controls */}
+                  {migrationsTotalCount > MIGRATIONS_PER_PAGE && (
+                    <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+                      <div className="text-xs text-gray-500 dark:text-gray-400">
+                        Showing {migrationsPage * MIGRATIONS_PER_PAGE + 1}-{Math.min((migrationsPage + 1) * MIGRATIONS_PER_PAGE, migrationsTotalCount)} of {migrationsTotalCount}
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => setMigrationsPage(p => Math.max(0, p - 1))}
+                          disabled={migrationsPage === 0}
+                          className="px-3 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-800"
+                        >
+                          Previous
+                        </button>
+                        <button
+                          onClick={() => setMigrationsPage(p => p + 1)}
+                          disabled={!migrationsHasMore}
+                          className="px-3 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-800"
+                        >
+                          Next
+                        </button>
+                      </div>
                     </div>
-                  ))}
-                </div>
+                  )}
+                </>
               )}
             </div>
           )}
@@ -1031,6 +1080,137 @@ function ResumeButton({ jobId, resumption }: { jobId: string; resumption?: Resum
         <div className="text-xs text-red-600 dark:text-red-400">
           {error}
         </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Past Migration Actions Component
+ * Shows action buttons based on migration status
+ */
+function PastMigrationActions({
+  migration,
+  onView,
+  onActionComplete,
+}: {
+  migration: MigrationListItem;
+  onView: () => void;
+  onActionComplete: () => void;
+}) {
+  const [isActing, setIsActing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleAction = async (action: 'resume' | 'pause' | 'cancel') => {
+    setIsActing(true);
+    setError(null);
+
+    try {
+      const endpoint = action === 'cancel'
+        ? `/api/migration/items/${migration.id}/pause`  // Cancel uses the same endpoint as pause
+        : `/api/migration/items/${migration.id}/${action}`;
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+      });
+
+      const data = await response.json();
+
+      if (!data.success) {
+        setError(data.message || `Failed to ${action} migration`);
+      } else {
+        // Wait a moment for the status to update
+        setTimeout(onActionComplete, 500);
+      }
+    } catch (err) {
+      setError(`Error ${action}ing migration`);
+      console.error(`Failed to ${action} migration:`, err);
+    } finally {
+      setIsActing(false);
+    }
+  };
+
+  const handleRetry = async () => {
+    setIsActing(true);
+    setError(null);
+
+    try {
+      const response = await fetch(`/api/migration/items/${migration.id}/retry`, {
+        method: 'POST',
+      });
+
+      const data = await response.json();
+
+      if (!data.success) {
+        setError(data.message || 'Failed to retry migration');
+      } else {
+        // Wait a moment for the retry to start
+        setTimeout(onActionComplete, 500);
+      }
+    } catch (err) {
+      setError('Error retrying migration');
+      console.error('Failed to retry migration:', err);
+    } finally {
+      setIsActing(false);
+    }
+  };
+
+  // Calculate failed count
+  const failedCount = Math.max(
+    migration.progress?.failed || 0,
+    (migration as any).failedItems?.length || 0
+  );
+
+  return (
+    <div className="flex gap-2 items-center">
+      {/* View button - always visible */}
+      <button
+        onClick={onView}
+        className="px-3 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+      >
+        👁️ View
+      </button>
+
+      {/* Resume button - for paused migrations */}
+      {migration.status === 'paused' && (
+        <button
+          onClick={() => handleAction('resume')}
+          disabled={isActing}
+          className="px-3 py-1 text-xs bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white rounded transition-colors disabled:cursor-not-allowed"
+        >
+          {isActing ? 'Resuming...' : '▶️ Resume'}
+        </button>
+      )}
+
+      {/* Pause button - for in-progress migrations */}
+      {migration.status === 'in_progress' && (
+        <button
+          onClick={() => handleAction('pause')}
+          disabled={isActing}
+          className="px-3 py-1 text-xs bg-red-600 hover:bg-red-700 disabled:bg-red-400 text-white rounded transition-colors disabled:cursor-not-allowed"
+        >
+          {isActing ? 'Stopping...' : '⏹️ Stop'}
+        </button>
+      )}
+
+      {/* Retry button - for completed/failed/cancelled with failed items (not UPDATE mode) */}
+      {failedCount > 0 &&
+       (migration.metadata as any)?.mode !== 'update' &&
+       (migration.status === 'completed' || migration.status === 'failed' || migration.status === 'cancelled') && (
+        <button
+          onClick={handleRetry}
+          disabled={isActing}
+          className="px-3 py-1 text-xs bg-orange-600 hover:bg-orange-700 disabled:bg-orange-400 text-white rounded transition-colors disabled:cursor-not-allowed"
+        >
+          {isActing ? 'Retrying...' : `🔄 Retry (${failedCount})`}
+        </button>
+      )}
+
+      {/* Error display */}
+      {error && (
+        <span className="text-xs text-red-600 dark:text-red-400">
+          {error}
+        </span>
       )}
     </div>
   );
