@@ -36,6 +36,16 @@ export interface MigrationLogPaths {
   batchesLog: string;
   /** Detailed error traces log */
   errorsLog: string;
+  /** Prefetch cache build log (UPDATE mode) */
+  prefetchLog: string;
+  /** Match lookup attempts log (UPDATE mode) */
+  matchesLog: string;
+  /** Update operations log (UPDATE mode) */
+  updatesLog: string;
+  /** All failures log (UPDATE mode) */
+  failuresLog: string;
+  /** Real-time statistics log (UPDATE mode) */
+  statsLog: string;
 }
 
 const LOG_LEVEL_VALUES: Record<LogLevel, number> = {
@@ -61,7 +71,9 @@ export const DEFAULT_LOG_CONFIG: LogConfig = {
  * Get log paths for a specific migration
  */
 export function getMigrationLogPaths(migrationId: string): MigrationLogPaths {
-  const migrationDir = path.join(DEFAULT_LOG_CONFIG.baseDir, migrationId);
+  // Sanitize migrationId to prevent path traversal and invalid filenames
+  const safeId = migrationId.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const migrationDir = path.join(DEFAULT_LOG_CONFIG.baseDir, safeId);
 
   return {
     migrationDir,
@@ -69,6 +81,11 @@ export function getMigrationLogPaths(migrationId: string): MigrationLogPaths {
     itemsLog: path.join(migrationDir, 'items.log'),
     batchesLog: path.join(migrationDir, 'batches.log'),
     errorsLog: path.join(migrationDir, 'errors.log'),
+    prefetchLog: path.join(migrationDir, 'prefetch.log'),
+    matchesLog: path.join(migrationDir, 'matches.log'),
+    updatesLog: path.join(migrationDir, 'updates.log'),
+    failuresLog: path.join(migrationDir, 'failures.log'),
+    statsLog: path.join(migrationDir, 'stats.log'),
   };
 }
 
