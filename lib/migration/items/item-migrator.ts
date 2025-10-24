@@ -26,6 +26,8 @@ import { convertFieldMappingToExternalIds } from './service';
 import { PrefetchCache, normalizeForMatch } from './prefetch-cache';
 import { getAppStructureCache } from './app-structure-cache';
 import { isFieldNotFoundError } from '../../podio/errors';
+import { getMigrationLogger, MigrationFileLogger } from '../file-logger';
+import { UpdateStatsTracker, PrefetchStats } from './update-stats-tracker';
 
 /**
  * Migration mode
@@ -637,6 +639,31 @@ export class ItemMigrator {
 
     await migrationStateStore.updateJobStatus(migrationJob.id, 'in_progress');
 
+    // Initialize file logger for UPDATE mode (critical for diagnostics)
+    let fileLogger: MigrationFileLogger | null = null;
+    let updateStatsTracker: UpdateStatsTracker | null = null;
+
+    if (config.mode === 'update' || config.mode === 'upsert') {
+      migrationLogger.info('Initializing UPDATE mode file logger', {
+        migrationId: migrationJob.id,
+        mode: config.mode,
+      });
+
+      fileLogger = await getMigrationLogger(migrationJob.id);
+      updateStatsTracker = new UpdateStatsTracker(migrationJob.id, fileLogger);
+
+      await fileLogger.logMigration('INFO', 'update_mode_migration_started', {
+        migrationId: migrationJob.id,
+        mode: config.mode,
+        sourceAppId: config.sourceAppId,
+        targetAppId: config.targetAppId,
+        sourceMatchField: config.sourceMatchField,
+        targetMatchField: config.targetMatchField,
+        dryRun: config.dryRun,
+        transferFiles: config.transferFiles,
+      });
+    }
+
     // Convert field mapping from field_id-based to external_id-based
     migrationLogger.info('Converting field mapping to external IDs');
     const externalIdFieldMapping = await convertFieldMappingToExternalIds(
@@ -666,7 +693,7 @@ export class ItemMigrator {
         ? await this.getCheckpointOffset(config.resumeToken)
         : 0;
 
-      // Create batch processor
+      // Create batch processor (pass logger and stats tracker for UPDATE mode)
       const processor = new ItemBatchProcessor(
         this.client,
         config.targetAppId,
@@ -676,7 +703,9 @@ export class ItemMigrator {
           maxRetries: 3,
           stopOnError: config.stopOnError || false,
           transferFiles: config.transferFiles || false,
-        }
+        },
+        fileLogger || undefined,
+        updateStatsTracker || undefined
       );
 
       // Set up progress tracking
@@ -778,11 +807,14 @@ export class ItemMigrator {
           matchField: targetMatchField,
         });
 
+        const prefetchStartTime = Date.now();
         await prefetchCache.prefetchTargetItems(
           this.client,
           config.targetAppId,
-          targetMatchField
+          targetMatchField,
+          fileLogger || undefined  // Pass logger for UPDATE mode logging
         );
+        const prefetchDuration = Date.now() - prefetchStartTime;
 
         // ADDED: Enhanced logging with cache statistics
         const cacheStats = prefetchCache.getCacheStats();
@@ -797,6 +829,19 @@ export class ItemMigrator {
             misses: cacheStats.misses,
           },
         });
+
+        // Record prefetch stats in UPDATE stats tracker
+        if (updateStatsTracker) {
+          const prefetchStats: PrefetchStats = {
+            totalFetched: cacheStats.totalItems,
+            totalCached: prefetchCache.size(),
+            totalSkipped: cacheStats.totalItems - prefetchCache.size(),
+            uniqueKeys: cacheStats.uniqueKeys,
+            durationMs: prefetchDuration,
+            itemsPerSecond: cacheStats.totalItems > 0 ? Math.round(cacheStats.totalItems / (prefetchDuration / 1000)) : 0,
+          };
+          updateStatsTracker.recordPrefetchComplete(prefetchStats);
+        }
       }
 
       migrationLogger.info('Streaming source items', {
@@ -809,6 +854,11 @@ export class ItemMigrator {
         isRetry,
         retryItemCount: isRetry ? config.retryItemIds!.length : 0,
       });
+
+      // Set total items in stats tracker if retry mode
+      if (updateStatsTracker && isRetry && config.retryItemIds) {
+        updateStatsTracker.setTotalItems(config.retryItemIds.length);
+      }
 
       // If retrying specific items, fetch them directly instead of streaming all items
       let sourceItemBatches: PodioItem[][];
@@ -1154,11 +1204,37 @@ export class ItemMigrator {
 
               if (sourceField) {
                 const matchValue = extractFieldValue(sourceField);
+                const normalizedKey = normalizeForMatch(matchValue);
+
+                // Log match lookup attempt
+                if (fileLogger) {
+                  await fileLogger.logMatch('DEBUG', 'update_match_lookup', {
+                    sourceItemId: sourceItem.item_id,
+                    matchField: sourceMatchField,
+                    matchValue,
+                    normalizedKey,
+                  });
+                }
 
                 // Use pre-fetch cache for instant lookup (NO API call)
                 const existingItem = prefetchCache?.getExistingItem(matchValue) || null;
 
                 if (existingItem) {
+                  // Match found - cache hit
+                  if (fileLogger) {
+                    await fileLogger.logMatch('INFO', 'update_match_found', {
+                      sourceItemId: sourceItem.item_id,
+                      matchField: sourceMatchField,
+                      matchValue,
+                      targetItemId: existingItem.item_id,
+                    });
+                  }
+
+                  // Record match hit in stats tracker
+                  if (updateStatsTracker) {
+                    updateStatsTracker.recordMatchLookup(true);
+                  }
+
                   itemsToUpdate.push({
                     itemId: existingItem.item_id,
                     fields: mappedFields,
@@ -1175,12 +1251,45 @@ export class ItemMigrator {
                     });
                   }
                 } else {
+                  // Match not found - cache miss
                   migrationLogger.warn('Item not found for update', {
                     sourceItemId: sourceItem.item_id,
                     sourceMatchField,
                     targetMatchField,
                     matchValue,
                   });
+
+                  // Get current cache stats for diagnostics
+                  const cacheStats = prefetchCache?.getCacheStats();
+
+                  // Log match failure with cache statistics
+                  if (fileLogger) {
+                    await fileLogger.logMatch('WARN', 'update_match_not_found', {
+                      sourceItemId: sourceItem.item_id,
+                      matchField: sourceMatchField,
+                      matchValue,
+                      normalizedKey,
+                      cacheSize: prefetchCache?.size() || 0,
+                      cacheHits: cacheStats?.hits || 0,
+                      cacheMisses: cacheStats?.misses || 0,
+                      hitRate: cacheStats?.hitRate ? Math.round(cacheStats.hitRate * 100) : 0,
+                    });
+
+                    // Log to failures.log as well
+                    await fileLogger.logFailure('update_match_failed', {
+                      sourceItemId: sourceItem.item_id,
+                      matchField: sourceMatchField,
+                      matchValue,
+                      normalizedKey,
+                      reason: 'No matching item found in target app',
+                      suggestion: 'Item may not exist in target, or match field value may differ',
+                    });
+                  }
+
+                  // Record match miss in stats tracker
+                  if (updateStatsTracker) {
+                    updateStatsTracker.recordMatchLookup(false);
+                  }
 
                   // Track failed match
                   const failedMatch = {
@@ -1219,6 +1328,29 @@ export class ItemMigrator {
                   sourceMatchField,
                   availableFields: sourceItem.fields.map(f => f.external_id),
                 });
+
+                // Log source field missing
+                if (fileLogger) {
+                  await fileLogger.logMatch('WARN', 'update_source_field_missing', {
+                    sourceItemId: sourceItem.item_id,
+                    expectedField: sourceMatchField,
+                    availableFields: sourceItem.fields.map(f => f.external_id),
+                  });
+
+                  // Log to failures.log as well
+                  await fileLogger.logFailure('update_source_field_missing', {
+                    sourceItemId: sourceItem.item_id,
+                    expectedField: sourceMatchField,
+                    availableFields: sourceItem.fields.map(f => f.external_id),
+                    reason: 'Source match field not found in source item',
+                    suggestion: 'Check that source app has the expected match field',
+                  });
+                }
+
+                // Record as match miss in stats tracker
+                if (updateStatsTracker) {
+                  updateStatsTracker.recordMatchLookup(false);
+                }
 
                 const failedMatch = {
                   sourceItemId: sourceItem.item_id,
@@ -1581,6 +1713,23 @@ export class ItemMigrator {
       }
 
       result.completed = true;
+
+      // Log final UPDATE mode statistics
+      if (updateStatsTracker) {
+        updateStatsTracker.logFinalStats();
+      }
+
+      // Log final completion for UPDATE mode
+      if (fileLogger && (config.mode === 'update' || config.mode === 'upsert')) {
+        await fileLogger.logMigration('INFO', 'update_mode_migration_completed', {
+          migrationId: migrationJob.id,
+          mode: config.mode,
+          successful: result.successful,
+          failed: result.failed,
+          processed: result.processed,
+          durationMs: Date.now() - startTime,
+        });
+      }
 
       // Update job status
       await migrationStateStore.updateJobStatus(

@@ -12,6 +12,7 @@
 import { PodioHttpClient } from '../../podio/http/client';
 import { PodioItem, streamItems, extractFieldValue } from '../../podio/resources/items';
 import { logger as migrationLogger } from '../logging';
+import { MigrationFileLogger } from '../file-logger';
 
 /**
  * Normalize a value for consistent matching
@@ -182,59 +183,58 @@ export class PrefetchCache {
    * @param client - Podio HTTP client
    * @param appId - Target app ID
    * @param matchField - Field external_id to use for matching (e.g., 'email', 'title')
+   * @param logger - Optional file logger for detailed logging
    */
   async prefetchTargetItems(
     client: PodioHttpClient,
     appId: number,
-    matchField: string
+    matchField: string,
+    logger?: MigrationFileLogger
   ): Promise<void> {
+    const startTime = Date.now();
+    this.matchField = matchField;
+    this.appId = appId;
+    let itemCount = 0;
+    let cachedCount = 0;
+    let skippedCount = 0;
+    let batchNum = 0;
+
+    // Log to both migration logger and file logger
     migrationLogger.info('Starting target item pre-fetch', {
       appId,
       matchField,
       timestamp: new Date().toISOString(),
     });
 
-    const startTime = Date.now();
-    this.matchField = matchField;
-    this.appId = appId;
-    let itemCount = 0;
+    if (logger) {
+      await logger.logPrefetch('INFO', 'prefetch_started', {
+        targetAppId: appId,
+        matchField,
+        timestamp: new Date().toISOString(),
+      });
+    }
 
     try {
       // Stream all items from target app
       for await (const batch of streamItems(client, appId, {
         batchSize: 500,
       })) {
+        batchNum++;
+        let batchCached = 0;
+        let batchSkipped = 0;
+
         for (const item of batch) {
+          itemCount++;
+
           // Find the match field in the item
           const field = item.fields.find(f => f.external_id === matchField);
-
-          // LOG: Debug each item's fields to see what we're getting
-          migrationLogger.debug('Pre-fetch processing item', {
-            appId,
-            itemId: item.item_id,
-            matchField,
-            fieldFound: !!field,
-            availableFields: item.fields.map(f => ({
-              external_id: f.external_id,
-              type: f.type,
-              hasValues: f.values && f.values.length > 0,
-            })),
-          });
 
           if (field && field.values && field.values.length > 0) {
             // Extract and normalize the match value
             const matchValue = extractFieldValue(field);
             const normalizedKey = normalizeValue(matchValue);
 
-            migrationLogger.debug('Pre-fetch found match value', {
-              appId,
-              itemId: item.item_id,
-              matchField,
-              matchValue,
-              normalizedKey,
-            });
-
-            // UPDATED: Skip empty values when building cache
+            // Skip empty values when building cache
             if (normalizedKey && normalizedKey !== '') {
               // Store item in cache with metadata
               const now = new Date();
@@ -244,35 +244,70 @@ export class PrefetchCache {
                 lastAccessedAt: now,
                 appId,
               });
+              cachedCount++;
+              batchCached++;
+
+              // Debug-level logging for each cached item
+              if (logger) {
+                await logger.logPrefetch('DEBUG', 'prefetch_item_cached', {
+                  itemId: item.item_id,
+                  matchValue,
+                  normalizedKey,
+                });
+              }
             } else {
-              migrationLogger.debug('Skipping item with empty match field value', {
-                appId,
-                itemId: item.item_id,
-                matchField,
-                matchValue,
-                reason: 'Empty values (null, undefined, "") are not cached',
-              });
+              skippedCount++;
+              batchSkipped++;
+
+              // Debug-level logging for skipped items
+              if (logger) {
+                await logger.logPrefetch('DEBUG', 'prefetch_item_skipped', {
+                  itemId: item.item_id,
+                  reason: 'no_match_field_value',
+                  matchValue,
+                });
+              }
             }
           } else {
-            migrationLogger.debug('Pre-fetch skipped item - field not found or empty', {
-              appId,
-              itemId: item.item_id,
-              matchField,
-              fieldFound: !!field,
-              fieldHasValues: field?.values?.length || 0,
-            });
-          }
+            skippedCount++;
+            batchSkipped++;
 
-          itemCount++;
+            // Debug-level logging for items without match field
+            if (logger) {
+              await logger.logPrefetch('DEBUG', 'prefetch_item_skipped', {
+                itemId: item.item_id,
+                reason: 'match_field_not_found',
+                matchField,
+                availableFields: item.fields.map(f => f.external_id),
+              });
+            }
+          }
         }
 
+        // Log batch progress
         migrationLogger.info('Pre-fetch batch processed', {
           appId,
           matchField,
+          batchNum,
           batchSize: batch.length,
-          totalCached: this.cache.size,
+          batchCached,
+          batchSkipped,
+          totalCached: cachedCount,
+          totalSkipped: skippedCount,
           totalItems: itemCount,
         });
+
+        if (logger) {
+          await logger.logPrefetch('INFO', 'prefetch_batch_processed', {
+            batchNum,
+            batchSize: batch.length,
+            itemsCached: batchCached,
+            itemsSkipped: batchSkipped,
+            totalCached: cachedCount,
+            totalSkipped: skippedCount,
+            totalItems: itemCount,
+          });
+        }
       }
 
       const duration = Date.now() - startTime;
@@ -280,11 +315,26 @@ export class PrefetchCache {
       migrationLogger.info('Pre-fetch complete', {
         appId,
         matchField,
-        totalItems: itemCount,
+        totalFetched: itemCount,
+        totalCached: cachedCount,
+        totalSkipped: skippedCount,
         uniqueKeys: this.cache.size,
         durationMs: duration,
         itemsPerSecond: itemCount > 0 ? Math.round(itemCount / (duration / 1000)) : 0,
       });
+
+      if (logger) {
+        await logger.logPrefetch('INFO', 'prefetch_complete', {
+          targetAppId: appId,
+          matchField,
+          totalFetched: itemCount,
+          totalCached: cachedCount,
+          totalSkipped: skippedCount,
+          uniqueKeys: this.cache.size,
+          durationMs: duration,
+          itemsPerSecond: itemCount > 0 ? Math.round(itemCount / (duration / 1000)) : 0,
+        });
+      }
     } catch (error) {
       migrationLogger.error('Pre-fetch failed', {
         appId,
@@ -292,6 +342,18 @@ export class PrefetchCache {
         itemCount,
         error: error instanceof Error ? error.message : String(error),
       });
+
+      if (logger) {
+        await logger.logPrefetch('ERROR', 'prefetch_failed', {
+          targetAppId: appId,
+          matchField,
+          totalFetched: itemCount,
+          totalCached: cachedCount,
+          totalSkipped: skippedCount,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+
       throw error;
     }
   }

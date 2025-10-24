@@ -22,7 +22,7 @@ import {
   cleanupOldLogs,
 } from './log-config';
 
-export type LogStream = 'migration' | 'items' | 'batches' | 'errors';
+export type LogStream = 'migration' | 'items' | 'batches' | 'errors' | 'prefetch' | 'matches' | 'updates' | 'failures' | 'stats';
 
 export interface LogEntry {
   timestamp: string;
@@ -71,12 +71,22 @@ export class MigrationFileLogger {
     this.writeQueues.set('items', []);
     this.writeQueues.set('batches', []);
     this.writeQueues.set('errors', []);
+    this.writeQueues.set('prefetch', []);
+    this.writeQueues.set('matches', []);
+    this.writeQueues.set('updates', []);
+    this.writeQueues.set('failures', []);
+    this.writeQueues.set('stats', []);
 
     // Create write streams
     await this.createStream('migration', this.paths.migrationLog);
     await this.createStream('items', this.paths.itemsLog);
     await this.createStream('batches', this.paths.batchesLog);
     await this.createStream('errors', this.paths.errorsLog);
+    await this.createStream('prefetch', this.paths.prefetchLog);
+    await this.createStream('matches', this.paths.matchesLog);
+    await this.createStream('updates', this.paths.updatesLog);
+    await this.createStream('failures', this.paths.failuresLog);
+    await this.createStream('stats', this.paths.statsLog);
 
     // Start periodic flush (every 1 second)
     this.startPeriodicFlush();
@@ -172,6 +182,59 @@ export class MigrationFileLogger {
   }
 
   /**
+   * Log to prefetch.log (cache build diagnostics)
+   */
+  async logPrefetch(
+    level: LogLevel,
+    message: string,
+    data?: Record<string, any>
+  ): Promise<void> {
+    await this.log('prefetch', level, message, data);
+  }
+
+  /**
+   * Log to matches.log (match lookup attempts)
+   */
+  async logMatch(
+    level: LogLevel,
+    message: string,
+    data?: Record<string, any>
+  ): Promise<void> {
+    await this.log('matches', level, message, data);
+  }
+
+  /**
+   * Log to updates.log (update operations)
+   */
+  async logUpdate(
+    level: LogLevel,
+    message: string,
+    data?: Record<string, any>
+  ): Promise<void> {
+    await this.log('updates', level, message, data);
+  }
+
+  /**
+   * Log to failures.log (all failures)
+   */
+  async logFailure(
+    message: string,
+    data?: Record<string, any>
+  ): Promise<void> {
+    await this.log('failures', 'ERROR', message, data);
+  }
+
+  /**
+   * Log to stats.log (real-time statistics)
+   */
+  async logStats(
+    message: string,
+    data?: Record<string, any>
+  ): Promise<void> {
+    await this.log('stats', 'INFO', message, data);
+  }
+
+  /**
    * Core logging method
    */
   private async log(
@@ -249,7 +312,7 @@ export class MigrationFileLogger {
   private async flushAll(): Promise<void> {
     const promises: Promise<void>[] = [];
 
-    for (const stream of ['migration', 'items', 'batches', 'errors'] as LogStream[]) {
+    for (const stream of ['migration', 'items', 'batches', 'errors', 'prefetch', 'matches', 'updates', 'failures', 'stats'] as LogStream[]) {
       promises.push(this.flush(stream));
     }
 

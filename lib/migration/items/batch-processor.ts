@@ -17,6 +17,8 @@ import { logger as migrationLogger, logMigrationEvent } from '../logging';
 import { getRateLimitTracker } from '../../podio/http/rate-limit-tracker';
 import { classifyError, ClassifiedError } from './error-classifier';
 import { ErrorCategory, FailedItemDetail } from '../state-store';
+import { MigrationFileLogger } from '../file-logger';
+import { UpdateStatsTracker } from './update-stats-tracker';
 
 /**
  * Batch processor configuration
@@ -127,11 +129,15 @@ export class ItemBatchProcessor extends EventEmitter {
     failed: number;
     total: number;
   };
+  private fileLogger: MigrationFileLogger | null = null;
+  private updateStatsTracker: UpdateStatsTracker | null = null;
 
   constructor(
     client: PodioHttpClient,
     appId: number,
-    config: Partial<BatchProcessorConfig> = {}
+    config: Partial<BatchProcessorConfig> = {},
+    fileLogger?: MigrationFileLogger,
+    updateStatsTracker?: UpdateStatsTracker
   ) {
     super();
 
@@ -151,10 +157,14 @@ export class ItemBatchProcessor extends EventEmitter {
       failed: 0,
       total: 0,
     };
+    this.fileLogger = fileLogger || null;
+    this.updateStatsTracker = updateStatsTracker || null;
 
     migrationLogger.info('Batch processor initialized', {
       appId: this.appId,
       config: this.config,
+      hasFileLogger: !!this.fileLogger,
+      hasUpdateStatsTracker: !!this.updateStatsTracker,
     });
   }
 
@@ -398,6 +408,15 @@ export class ItemBatchProcessor extends EventEmitter {
         rateLimitStatus: tracker.getStatus(),
       });
 
+      // Log UPDATE batch start
+      if (this.fileLogger) {
+        await this.fileLogger.logUpdate('INFO', 'update_batch_started', {
+          batchNumber: batchNum + 1,
+          itemCount: batch.length,
+          targetItemIds: batch.map(u => u.itemId),
+        });
+      }
+
       try {
         // Check if this is a file-only migration (empty fields + transferFiles enabled)
         const isFileOnlyMigration = this.config.transferFiles &&
@@ -559,6 +578,21 @@ export class ItemBatchProcessor extends EventEmitter {
           const batchIdx = idToBatchIndex.get(item.itemId);
           const globalIndex = batchIdx != null ? start + batchIdx : start;
           this.emit('itemSuccess', globalIndex, item);
+
+          // Log successful update
+          const batchItem = batch[batchIdx!];
+          if (this.fileLogger && batchItem) {
+            this.fileLogger.logUpdate('DEBUG', 'update_item_success', {
+              sourceItemId: batchItem.sourceItemId,
+              targetItemId: item.itemId,
+              fieldsUpdated: Object.keys(batchItem.fields),
+            });
+          }
+
+          // Record in stats tracker
+          if (this.updateStatsTracker) {
+            this.updateStatsTracker.recordUpdateAttempt(true);
+          }
         });
 
         batchResult.failed.forEach((failure) => {
@@ -579,6 +613,31 @@ export class ItemBatchProcessor extends EventEmitter {
             error: failure.error,
           });
 
+          // Log failed update
+          const batchItem = batch[failure.index];
+          if (this.fileLogger && batchItem) {
+            this.fileLogger.logUpdate('ERROR', 'update_item_failed', {
+              sourceItemId: batchItem.sourceItemId,
+              targetItemId: failure.itemId,
+              error: failure.error,
+              errorCategory: classifiedError.category,
+            });
+
+            // Also log to failures.log
+            this.fileLogger.logFailure('update_operation_failed', {
+              sourceItemId: batchItem.sourceItemId,
+              targetItemId: failure.itemId,
+              error: failure.error,
+              errorCategory: classifiedError.category,
+              fieldsAttempted: Object.keys(batchItem.fields),
+            });
+          }
+
+          // Record in stats tracker
+          if (this.updateStatsTracker) {
+            this.updateStatsTracker.recordUpdateAttempt(false);
+          }
+
           this.emit('itemFailed', globalIndex, failure.error, false);
           result.failedItems.push({
             index: globalIndex,
@@ -593,6 +652,18 @@ export class ItemBatchProcessor extends EventEmitter {
           successful: batchResult.successCount,
           failed: batchResult.failureCount,
         });
+
+        // Log UPDATE batch completion
+        if (this.fileLogger) {
+          await this.fileLogger.logUpdate('INFO', 'update_batch_complete', {
+            batchNumber: batchNum + 1,
+            successCount: batchResult.successCount,
+            failedCount: batchResult.failureCount,
+            totalProcessed: this.stats.processed,
+            totalSuccessful: this.stats.successful,
+            totalFailed: this.stats.failed,
+          });
+        }
 
         // Emit progress
         this.emitProgress();
