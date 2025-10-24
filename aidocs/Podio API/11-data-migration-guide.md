@@ -189,7 +189,18 @@ Before starting each batch, the processor checks remaining quota:
 // Before each batch
 const tracker = getRateLimitTracker();
 if (tracker.shouldPause(10)) { // Less than 10 requests remaining
+  const timeUntilReset = tracker.getTimeUntilReset();
+  const resumeAt = new Date(Date.now() + timeUntilReset);
+
+  processor.emit('rateLimitPause', {
+    remaining: tracker.getRemainingQuota(),
+    limit: tracker.getLimit(),
+    resumeAt,
+    reason: 'pre_batch_quota',
+  });
+
   await tracker.waitForReset();
+  processor.emit('rateLimitResume');
 }
 
 // Process batch...
@@ -222,6 +233,15 @@ if (hasRateLimitErrors && hasMoreBatches) {
 ```
 
 This ensures that even if rate limits are hit mid-batch, the system won't hammer the API with the next batch while still throttled.
+
+#### Rate Limit Events
+
+The batch processor emits structured events when pausing and resuming so the UI can react:
+
+- `rateLimitPause`: `{ remaining, limit, resumeAt, reason: 'pre_batch_quota' | 'batch_failures' }`
+- `rateLimitResume`: emitted with no payload when processing continues
+
+`reason` allows you to distinguish between proactive pauses (low remaining quota) and pauses triggered by rate limit failures detected in the previous batch.
 
 ### Rate Limit Strategy
 

@@ -94,6 +94,15 @@ export interface BatchProcessorEvents {
   complete: (result: BatchResult) => void;
   /** Emitted when processing encounters a fatal error */
   error: (error: Error) => void;
+  /** Emitted when processing pauses due to Podio rate limits */
+  rateLimitPause: (payload: {
+    remaining: number;
+    limit: number;
+    resumeAt: Date;
+    reason?: 'batch_failures' | 'pre_batch_quota';
+  }) => void;
+  /** Emitted when processing resumes after a rate-limit pause */
+  rateLimitResume: () => void;
 }
 
 /**
@@ -195,6 +204,7 @@ export class ItemBatchProcessor extends EventEmitter {
 
     // Process in batches
     const batches = Math.ceil(items.length / this.config.batchSize);
+    const tracker = getRateLimitTracker();
 
     for (let batchNum = 0; batchNum < batches; batchNum++) {
       const start = batchNum * this.config.batchSize;
@@ -202,9 +212,8 @@ export class ItemBatchProcessor extends EventEmitter {
       const batch = items.slice(start, end);
 
       // Proactive rate limit check - pause if approaching limit
-      const tracker = getRateLimitTracker();
       if (tracker.shouldPause(10)) {
-        const timeUntilReset = tracker.getTimeUntilReset();
+        const timeUntilReset = Math.max(0, tracker.getTimeUntilReset());
         const resumeAt = new Date(Date.now() + timeUntilReset);
 
         migrationLogger.warn('Approaching rate limit - pausing before batch', {
@@ -220,6 +229,7 @@ export class ItemBatchProcessor extends EventEmitter {
           remaining: tracker.getRemainingQuota(),
           limit: tracker.getLimit(),
           resumeAt,
+          reason: 'pre_batch_quota',
         });
 
         // Wait for rate limit reset
@@ -323,7 +333,6 @@ export class ItemBatchProcessor extends EventEmitter {
         );
 
         if (hasRateLimitErrors && batchNum < batches - 1) {
-          const tracker = getRateLimitTracker();
           const timeUntilReset = tracker.getTimeUntilReset();
 
           if (timeUntilReset > 0) {
@@ -411,6 +420,7 @@ export class ItemBatchProcessor extends EventEmitter {
 
     // Process in batches
     const batches = Math.ceil(updates.length / this.config.batchSize);
+    const tracker = getRateLimitTracker();
 
     for (let batchNum = 0; batchNum < batches; batchNum++) {
       const start = batchNum * this.config.batchSize;
@@ -418,9 +428,8 @@ export class ItemBatchProcessor extends EventEmitter {
       const batch = updates.slice(start, end);
 
       // Proactive rate limit check - pause if approaching limit
-      const tracker = getRateLimitTracker();
       if (tracker.shouldPause(10)) {
-        const timeUntilReset = tracker.getTimeUntilReset();
+        const timeUntilReset = Math.max(0, tracker.getTimeUntilReset());
         const resumeAt = new Date(Date.now() + timeUntilReset);
 
         migrationLogger.warn('Approaching rate limit - pausing before batch', {
@@ -435,6 +444,7 @@ export class ItemBatchProcessor extends EventEmitter {
           remaining: tracker.getRemainingQuota(),
           limit: tracker.getLimit(),
           resumeAt,
+          reason: 'pre_batch_quota',
         });
 
         // Wait for rate limit reset
@@ -734,7 +744,6 @@ export class ItemBatchProcessor extends EventEmitter {
         );
 
         if (hasRateLimitErrors && batchNum < batches - 1) {
-          const tracker = getRateLimitTracker();
           const timeUntilReset = tracker.getTimeUntilReset();
 
           if (timeUntilReset > 0) {

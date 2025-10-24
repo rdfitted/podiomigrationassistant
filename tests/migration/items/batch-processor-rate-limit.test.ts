@@ -160,6 +160,45 @@ describe('ItemBatchProcessor Rate Limit Handling', () => {
       expect(waitForResetSpy).not.toHaveBeenCalled();
     });
 
+    it('should pause proactively when remaining quota is low', async () => {
+      const updates = [
+        { itemId: 1, fields: { title: 'Item 1' } },
+        { itemId: 2, fields: { title: 'Item 2' } },
+      ];
+
+      const mockBulkUpdateItems = itemsModule.bulkUpdateItems as jest.MockedFunction<typeof itemsModule.bulkUpdateItems>;
+
+      mockBulkUpdateItems.mockResolvedValueOnce({
+        successful: [
+          { itemId: 1, revision: 1 },
+          { itemId: 2, revision: 1 },
+        ],
+        failed: [],
+        successCount: 2,
+        failureCount: 0,
+      });
+
+      const tracker = getRateLimitTracker();
+      const resetTime = new Date(Date.now() + 2000).toISOString();
+      tracker.updateFromHeaders(100, 5, resetTime);
+
+      const waitForResetSpy = jest.spyOn(tracker, 'waitForReset').mockResolvedValue();
+      const pauseEvents: Array<{ reason?: string; resumeAt: Date }> = [];
+      const resumeSpy = jest.fn();
+      processor.on('rateLimitPause', event => pauseEvents.push(event));
+      processor.on('rateLimitResume', resumeSpy);
+
+      const result = await processor.processUpdate(updates);
+
+      expect(result.successful).toBe(2);
+      expect(result.failed).toBe(0);
+      expect(waitForResetSpy).toHaveBeenCalledTimes(1);
+      expect(pauseEvents).toHaveLength(1);
+      expect(pauseEvents[0].reason).toBe('pre_batch_quota');
+      expect(pauseEvents[0].resumeAt).toBeInstanceOf(Date);
+      expect(resumeSpy).toHaveBeenCalledTimes(1);
+    });
+
     it('should detect rate limit errors with 420 status code', async () => {
       const updates = [
         { itemId: 1, fields: { title: 'Item 1' } },
@@ -348,6 +387,12 @@ describe('ItemBatchProcessor Rate Limit Handling', () => {
 
       // Spy on waitForReset
       const waitForResetSpy = jest.spyOn(tracker, 'waitForReset').mockResolvedValue();
+      const pauseEvents: Array<{ reason?: string; resumeAt: Date }> = [];
+      const resumeSpy = jest.fn();
+      processor.on('rateLimitPause', (event) => {
+        pauseEvents.push(event);
+      });
+      processor.on('rateLimitResume', resumeSpy);
 
       // Execute
       const result = await processor.processCreate(items);
@@ -358,6 +403,10 @@ describe('ItemBatchProcessor Rate Limit Handling', () => {
 
       // Verify waitForReset was called
       expect(waitForResetSpy).toHaveBeenCalledTimes(1);
+      expect(pauseEvents).toHaveLength(1);
+      expect(pauseEvents[0].reason).toBe('batch_failures');
+      expect(pauseEvents[0].resumeAt).toBeInstanceOf(Date);
+      expect(resumeSpy).toHaveBeenCalledTimes(1);
     });
   });
 });

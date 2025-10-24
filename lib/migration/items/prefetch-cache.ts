@@ -13,26 +13,7 @@ import { PodioHttpClient } from '../../podio/http/client';
 import { PodioItem, streamItems, extractFieldValue } from '../../podio/resources/items';
 import { logger as migrationLogger } from '../logging';
 import { MigrationFileLogger } from '../file-logger';
-
-/**
- * Helper to mask PII (emails, phone numbers, etc.) in logs
- * @param value - Value to mask
- * @returns Masked string suitable for logging
- */
-function maskPII(value: unknown): string {
-  const str = String(value);
-
-  // Email-like pattern - mask both local and domain for strict privacy compliance
-  if (str.includes('@')) {
-    const [local, domain] = str.split('@');
-    const maskedLocal = local.length > 2 ? `${local.slice(0, 2)}***` : '***';
-    const maskedDomain = domain.length > 4 ? `${domain.slice(0, 2)}***` : '***';
-    return `${maskedLocal}@${maskedDomain}`;
-  }
-
-  // Other values: show first 2 and last 2 chars
-  return str.length > 6 ? `${str.slice(0, 2)}***${str.slice(-2)}` : '***';
-}
+import { maskPII } from '../utils/pii-masking';
 
 /**
  * Normalize a value for consistent matching
