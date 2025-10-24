@@ -22,10 +22,12 @@ import { MigrationFileLogger } from '../file-logger';
 function maskPII(value: unknown): string {
   const str = String(value);
 
-  // Email-like pattern
+  // Email-like pattern - mask both local and domain for strict privacy compliance
   if (str.includes('@')) {
     const [local, domain] = str.split('@');
-    return local.length > 2 ? `${local.slice(0, 2)}***@${domain}` : `***@${domain}`;
+    const maskedLocal = local.length > 2 ? `${local.slice(0, 2)}***` : '***';
+    const maskedDomain = domain.length > 4 ? `${domain.slice(0, 2)}***` : '***';
+    return `${maskedLocal}@${maskedDomain}`;
   }
 
   // Other values: show first 2 and last 2 chars
