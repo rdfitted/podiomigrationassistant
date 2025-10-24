@@ -159,6 +159,90 @@ async function parallelBatchProcessing(
 - **Status Codes**: 420 (Enhance Your Calm) and 429 (Too Many Requests) indicate rate limits
 - **Note**: The application tracks and adapts to your account's specific rate limit automatically
 
+### Multi-Level Rate Limit Protection
+
+The migration system implements defense-in-depth rate limit handling at multiple levels:
+
+#### 1. Request-Level Protection
+Individual API requests automatically wait for rate limit reset before retrying:
+
+```typescript
+// Automatic in withRetry wrapper
+async function withRetry<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (error.isRateLimited()) {
+      const tracker = getRateLimitTracker();
+      await tracker.waitForReset(); // Wait until quota resets
+      return await operation(); // Retry after reset
+    }
+    throw error;
+  }
+}
+```
+
+#### 2. Batch-Level Protection
+Before starting each batch, the processor checks remaining quota:
+
+```typescript
+// Before each batch
+const tracker = getRateLimitTracker();
+if (tracker.shouldPause(10)) { // Less than 10 requests remaining
+  const timeUntilReset = tracker.getTimeUntilReset();
+  const resumeAt = new Date(Date.now() + timeUntilReset);
+
+  processor.emit('rateLimitPause', {
+    remaining: tracker.getRemainingQuota(),
+    limit: tracker.getLimit(),
+    resumeAt,
+    reason: 'pre_batch_quota',
+  });
+
+  await tracker.waitForReset();
+  processor.emit('rateLimitResume');
+}
+
+// Process batch...
+await bulkUpdateItems(client, batch, options);
+```
+
+#### 3. Post-Batch Rate Limit Detection
+After a batch completes, if rate limit errors occurred, the processor pauses before starting the next batch:
+
+```typescript
+// After batch completes
+const hasRateLimitErrors = batchResult.failed.some(
+  failure => failure.error.includes('rate limit') ||
+             failure.error.includes('429') ||
+             failure.error.includes('420')
+);
+
+if (hasRateLimitErrors && hasMoreBatches) {
+  const tracker = getRateLimitTracker();
+  const timeUntilReset = tracker.getTimeUntilReset();
+
+  if (timeUntilReset > 0) {
+    logger.warn('Rate limit errors detected - pausing before next batch', {
+      timeUntilResetMin: Math.round(timeUntilReset / 60000),
+    });
+
+    await tracker.waitForReset();
+  }
+}
+```
+
+This ensures that even if rate limits are hit mid-batch, the system won't hammer the API with the next batch while still throttled.
+
+#### Rate Limit Events
+
+The batch processor emits structured events when pausing and resuming so the UI can react:
+
+- `rateLimitPause`: `{ remaining, limit, resumeAt, reason: 'pre_batch_quota' | 'batch_failures' }`
+- `rateLimitResume`: emitted with no payload when processing continues
+
+`reason` allows you to distinguish between proactive pauses (low remaining quota) and pauses triggered by rate limit failures detected in the previous batch.
+
 ### Rate Limit Strategy
 
 ```typescript
