@@ -14,7 +14,7 @@ import {
   BulkUpdateResult,
 } from '../../podio/resources/items';
 import { logger as migrationLogger, logMigrationEvent } from '../logging';
-import { getRateLimitTracker } from '../../podio/http/rate-limit-tracker';
+import { getRateLimitTracker, RateLimitTracker } from '../../podio/http/rate-limit-tracker';
 import { classifyError, ClassifiedError } from './error-classifier';
 import { ErrorCategory, FailedItemDetail } from '../state-store';
 import { MigrationFileLogger } from '../file-logger';
@@ -321,52 +321,9 @@ export class ItemBatchProcessor extends EventEmitter {
           failed: batchResult.failureCount,
         });
 
-        // Check if we hit rate limits during this batch
-        // If so, pause before starting the next batch to avoid hammering the API
-        const hasRateLimitErrors = batchResult.failed.some(
-          failure => {
-            const errorMsg = failure.error.toLowerCase();
-            return errorMsg.includes('rate limit') ||
-                   errorMsg.includes('429') ||
-                   errorMsg.includes('420');
-          }
-        );
-
-        if (hasRateLimitErrors && batchNum < batches - 1) {
-          const timeUntilReset = tracker.getTimeUntilReset();
-
-          if (timeUntilReset > 0) {
-            const resumeAt = new Date(Date.now() + timeUntilReset);
-
-            migrationLogger.warn('Rate limit errors detected in batch - pausing before next batch', {
-              appId: this.appId,
-              batchNumber: batchNum + 1,
-              nextBatch: batchNum + 2,
-              rateLimitFailures: batchResult.failed.filter(f => {
-                const msg = f.error.toLowerCase();
-                return msg.includes('rate limit') || msg.includes('429') || msg.includes('420');
-              }).length,
-              timeUntilResetMin: Math.round(timeUntilReset / 60000),
-              resumeAt: resumeAt.toISOString(),
-            });
-
-            this.emit('rateLimitPause', {
-              remaining: tracker.getRemainingQuota(),
-              limit: tracker.getLimit(),
-              resumeAt,
-              reason: 'batch_failures',
-            });
-
-            await tracker.waitForReset();
-
-            migrationLogger.info('Rate limit reset complete - resuming batch processing', {
-              appId: this.appId,
-              nextBatch: batchNum + 2,
-            });
-
-            this.emit('rateLimitResume');
-          }
-        }
+        await this.handlePostBatchRateLimit(batchResult, batchNum, batches, tracker, {
+          appId: this.appId,
+        });
       } catch (error) {
         migrationLogger.error('Batch processing failed', {
           appId: this.appId,
@@ -743,51 +700,10 @@ export class ItemBatchProcessor extends EventEmitter {
           }
         );
 
-        if (hasRateLimitErrors && batchNum < batches - 1) {
-          const timeUntilReset = tracker.getTimeUntilReset();
-
-          if (timeUntilReset > 0) {
-            const resumeAt = new Date(Date.now() + timeUntilReset);
-
-            migrationLogger.warn('Rate limit errors detected in batch - pausing before next batch', {
-              batchNumber: batchNum + 1,
-              nextBatch: batchNum + 2,
-              rateLimitFailures: batchResult.failed.filter(f => {
-                const msg = f.error.toLowerCase();
-                return msg.includes('rate limit') || msg.includes('429') || msg.includes('420');
-              }).length,
-              timeUntilResetMin: Math.round(timeUntilReset / 60000),
-              resumeAt: resumeAt.toISOString(),
-            });
-
-            this.emit('rateLimitPause', {
-              remaining: tracker.getRemainingQuota(),
-              limit: tracker.getLimit(),
-              resumeAt,
-              reason: 'batch_failures',
-            });
-
-            // Log rate limit pause for UPDATE operations
-            if (this.fileLogger) {
-              await this.fileLogger.logUpdate('WARN', 'rate_limit_pause', {
-                batchNumber: batchNum + 1,
-                rateLimitFailures: batchResult.failed.filter(f => {
-                  const msg = f.error.toLowerCase();
-                  return msg.includes('rate limit') || msg.includes('429') || msg.includes('420');
-                }).length,
-                timeUntilResetMin: Math.round(timeUntilReset / 60000),
-              }).catch(() => {});
-            }
-
-            await tracker.waitForReset();
-
-            migrationLogger.info('Rate limit reset complete - resuming batch processing', {
-              nextBatch: batchNum + 2,
-            });
-
-            this.emit('rateLimitResume');
-          }
-        }
+        await this.handlePostBatchRateLimit(batchResult, batchNum, batches, tracker, {
+          appId: this.appId,
+          logUpdateEvent: true,
+        });
       } catch (error) {
         migrationLogger.error('Batch processing failed', {
           batchNumber: batchNum + 1,
@@ -811,6 +727,69 @@ export class ItemBatchProcessor extends EventEmitter {
     });
 
     return result;
+  }
+
+  private isRateLimitFailure(errorValue: unknown): boolean {
+    const errorMessage = typeof errorValue === 'string' ? errorValue : String(errorValue ?? '');
+    const classified = classifyError(new Error(errorMessage));
+    return classified.category === 'rate_limit';
+  }
+
+  private async handlePostBatchRateLimit(
+    batchResult: BulkCreateResult | BulkUpdateResult,
+    batchNum: number,
+    batches: number,
+    tracker: RateLimitTracker,
+    options: { appId?: number; logUpdateEvent?: boolean } = {}
+  ): Promise<void> {
+    const { appId, logUpdateEvent } = options;
+    const hasRateLimitErrors = batchResult.failed.some(failure => this.isRateLimitFailure(failure.error));
+
+    if (!hasRateLimitErrors || batchNum >= batches - 1) {
+      return;
+    }
+
+    const timeUntilReset = tracker.getTimeUntilReset();
+    if (timeUntilReset <= 0) {
+      return;
+    }
+
+    const resumeAt = new Date(Date.now() + timeUntilReset);
+    const rateLimitFailures = batchResult.failed.filter(failure => this.isRateLimitFailure(failure.error)).length;
+    const timeUntilResetMin = Math.round(timeUntilReset / 60000);
+
+    migrationLogger.warn('Rate limit errors detected in batch - pausing before next batch', {
+      appId,
+      batchNumber: batchNum + 1,
+      nextBatch: batchNum + 2,
+      rateLimitFailures,
+      timeUntilResetMin,
+      resumeAt: resumeAt.toISOString(),
+    });
+
+    this.emit('rateLimitPause', {
+      remaining: tracker.getRemainingQuota(),
+      limit: tracker.getLimit(),
+      resumeAt,
+      reason: 'batch_failures',
+    });
+
+    if (logUpdateEvent && this.fileLogger) {
+      await this.fileLogger.logUpdate('WARN', 'rate_limit_pause', {
+        batchNumber: batchNum + 1,
+        rateLimitFailures,
+        timeUntilResetMin,
+      }).catch(() => {});
+    }
+
+    await tracker.waitForReset();
+
+    migrationLogger.info('Rate limit reset complete - resuming batch processing', {
+      appId,
+      nextBatch: batchNum + 2,
+    });
+
+    this.emit('rateLimitResume');
   }
 
   /**
