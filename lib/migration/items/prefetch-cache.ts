@@ -15,6 +15,24 @@ import { logger as migrationLogger } from '../logging';
 import { MigrationFileLogger } from '../file-logger';
 
 /**
+ * Helper to mask PII (emails, phone numbers, etc.) in logs
+ * @param value - Value to mask
+ * @returns Masked string suitable for logging
+ */
+function maskPII(value: unknown): string {
+  const str = String(value);
+
+  // Email-like pattern
+  if (str.includes('@')) {
+    const [local, domain] = str.split('@');
+    return local.length > 2 ? `${local.slice(0, 2)}***@${domain}` : `***@${domain}`;
+  }
+
+  // Other values: show first 2 and last 2 chars
+  return str.length > 6 ? `${str.slice(0, 2)}***${str.slice(-2)}` : '***';
+}
+
+/**
  * Normalize a value for consistent matching
  * Handles strings, numbers, arrays, and objects
  *
@@ -251,8 +269,8 @@ export class PrefetchCache {
               if (logger) {
                 void logger.logPrefetch('DEBUG', 'prefetch_item_cached', {
                   itemId: item.item_id,
-                  matchValue,
-                  normalizedKey,
+                  matchValue: maskPII(matchValue),
+                  normalizedKey: maskPII(normalizedKey),
                 });
               }
             } else {
@@ -264,7 +282,7 @@ export class PrefetchCache {
                 void logger.logPrefetch('DEBUG', 'prefetch_item_skipped', {
                   itemId: item.item_id,
                   reason: 'no_match_field_value',
-                  matchValue,
+                  matchValue: maskPII(matchValue),
                 });
               }
             }

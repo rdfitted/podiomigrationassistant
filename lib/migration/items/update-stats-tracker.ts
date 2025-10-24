@@ -111,7 +111,7 @@ export class UpdateStatsTracker {
   recordPrefetchComplete(stats: PrefetchStats): void {
     this.prefetchStats = stats;
 
-    // Log to stats.log
+    // Log to stats.log (best-effort, don't throw on logging failure)
     if (this.logger) {
       this.logger.logStats('prefetch_complete', {
         migrationId: this.migrationId,
@@ -121,7 +121,7 @@ export class UpdateStatsTracker {
         uniqueKeys: stats.uniqueKeys,
         durationMs: stats.durationMs,
         itemsPerSecond: stats.itemsPerSecond,
-      });
+      }).catch(() => {});
     }
   }
 
@@ -248,7 +248,7 @@ export class UpdateStatsTracker {
         percent: stats.progressPercent,
         estimatedTimeRemainingMs: stats.estimatedTimeRemaining,
       },
-    });
+    }).catch(() => {}); // Best-effort logging
   }
 
   /**
@@ -277,8 +277,10 @@ export class UpdateStatsTracker {
       },
       totalDurationMs,
       throughput: {
-        itemsPerSecond: this.processedItems > 0 ? Math.round(this.processedItems / (totalDurationMs / 1000)) : 0,
+        itemsPerSecond: this.processedItems > 0 && totalDurationMs > 0
+          ? Math.round(this.processedItems / (totalDurationMs / 1000))
+          : 0,
       },
-    });
+    }).catch(() => {}); // Best-effort logging
   }
 }

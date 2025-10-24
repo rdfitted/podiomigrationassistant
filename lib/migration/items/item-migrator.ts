@@ -26,8 +26,26 @@ import { convertFieldMappingToExternalIds } from './service';
 import { PrefetchCache, normalizeForMatch } from './prefetch-cache';
 import { getAppStructureCache } from './app-structure-cache';
 import { isFieldNotFoundError } from '../../podio/errors';
-import { getMigrationLogger, MigrationFileLogger } from '../file-logger';
+import { getMigrationLogger, removeMigrationLogger, MigrationFileLogger } from '../file-logger';
 import { UpdateStatsTracker, PrefetchStats } from './update-stats-tracker';
+
+/**
+ * Helper to mask PII (emails, phone numbers, etc.) in logs
+ * @param value - Value to mask
+ * @returns Masked string suitable for logging
+ */
+function maskPII(value: unknown): string {
+  const str = String(value);
+
+  // Email-like pattern
+  if (str.includes('@')) {
+    const [local, domain] = str.split('@');
+    return local.length > 2 ? `${local.slice(0, 2)}***@${domain}` : `***@${domain}`;
+  }
+
+  // Other values: show first 2 and last 2 chars
+  return str.length > 6 ? `${str.slice(0, 2)}***${str.slice(-2)}` : '***';
+}
 
 /**
  * Migration mode
@@ -1211,8 +1229,8 @@ export class ItemMigrator {
                   void fileLogger.logMatch('DEBUG', 'update_match_lookup', {
                     sourceItemId: sourceItem.item_id,
                     matchField: sourceMatchField,
-                    matchValue,
-                    normalizedKey,
+                    matchValue: maskPII(matchValue),
+                    normalizedKey: maskPII(normalizedKey),
                   });
                 }
 
@@ -1225,7 +1243,7 @@ export class ItemMigrator {
                     void fileLogger.logMatch('INFO', 'update_match_found', {
                       sourceItemId: sourceItem.item_id,
                       matchField: sourceMatchField,
-                      matchValue,
+                      matchValue: maskPII(matchValue),
                       targetItemId: existingItem.item_id,
                     });
                   }
@@ -1267,8 +1285,8 @@ export class ItemMigrator {
                     void fileLogger.logMatch('WARN', 'update_match_not_found', {
                       sourceItemId: sourceItem.item_id,
                       matchField: sourceMatchField,
-                      matchValue,
-                      normalizedKey,
+                      matchValue: maskPII(matchValue),
+                      normalizedKey: maskPII(normalizedKey),
                       cacheSize: prefetchCache?.size() || 0,
                       cacheHits: cacheStats?.hits || 0,
                       cacheMisses: cacheStats?.misses || 0,
@@ -1279,8 +1297,8 @@ export class ItemMigrator {
                     void fileLogger.logFailure('update_match_failed', {
                       sourceItemId: sourceItem.item_id,
                       matchField: sourceMatchField,
-                      matchValue,
-                      normalizedKey,
+                      matchValue: maskPII(matchValue),
+                      normalizedKey: maskPII(normalizedKey),
                       reason: 'No matching item found in target app',
                       suggestion: 'Item may not exist in target, or match field value may differ',
                     });
@@ -1734,6 +1752,9 @@ export class ItemMigrator {
           processed: result.processed,
           durationMs: Date.now() - startTime,
         });
+
+        // Clean up logger resources (close streams and stop timers)
+        await removeMigrationLogger(migrationJob.id);
       }
 
       // Update job status
@@ -1760,6 +1781,15 @@ export class ItemMigrator {
         'migration_execution',
         error instanceof Error ? error.message : String(error)
       );
+
+      // Clean up logger resources on error (best-effort, don't throw)
+      if (fileLogger) {
+        try {
+          await removeMigrationLogger(migrationJob.id);
+        } catch {
+          // Swallow cleanup errors - migration already failed
+        }
+      }
 
       throw error;
     }
