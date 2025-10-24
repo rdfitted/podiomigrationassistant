@@ -1206,9 +1206,9 @@ export class ItemMigrator {
                 const matchValue = extractFieldValue(sourceField);
                 const normalizedKey = normalizeForMatch(matchValue);
 
-                // Log match lookup attempt
+                // Log match lookup attempt (fire-and-forget for performance)
                 if (fileLogger) {
-                  await fileLogger.logMatch('DEBUG', 'update_match_lookup', {
+                  void fileLogger.logMatch('DEBUG', 'update_match_lookup', {
                     sourceItemId: sourceItem.item_id,
                     matchField: sourceMatchField,
                     matchValue,
@@ -1220,9 +1220,9 @@ export class ItemMigrator {
                 const existingItem = prefetchCache?.getExistingItem(matchValue) || null;
 
                 if (existingItem) {
-                  // Match found - cache hit
+                  // Match found - cache hit (log fire-and-forget for performance)
                   if (fileLogger) {
-                    await fileLogger.logMatch('INFO', 'update_match_found', {
+                    void fileLogger.logMatch('INFO', 'update_match_found', {
                       sourceItemId: sourceItem.item_id,
                       matchField: sourceMatchField,
                       matchValue,
@@ -1262,9 +1262,9 @@ export class ItemMigrator {
                   // Get current cache stats for diagnostics
                   const cacheStats = prefetchCache?.getCacheStats();
 
-                  // Log match failure with cache statistics
+                  // Log match failure with cache statistics (fire-and-forget for performance)
                   if (fileLogger) {
-                    await fileLogger.logMatch('WARN', 'update_match_not_found', {
+                    void fileLogger.logMatch('WARN', 'update_match_not_found', {
                       sourceItemId: sourceItem.item_id,
                       matchField: sourceMatchField,
                       matchValue,
@@ -1275,8 +1275,8 @@ export class ItemMigrator {
                       hitRate: cacheStats?.hitRate ? Math.round(cacheStats.hitRate * 100) : 0,
                     });
 
-                    // Log to failures.log as well
-                    await fileLogger.logFailure('update_match_failed', {
+                    // Log to failures.log as well (fire-and-forget for performance)
+                    void fileLogger.logFailure('update_match_failed', {
                       sourceItemId: sourceItem.item_id,
                       matchField: sourceMatchField,
                       matchValue,
@@ -1329,16 +1329,16 @@ export class ItemMigrator {
                   availableFields: sourceItem.fields.map(f => f.external_id),
                 });
 
-                // Log source field missing
+                // Log source field missing (fire-and-forget for performance)
                 if (fileLogger) {
-                  await fileLogger.logMatch('WARN', 'update_source_field_missing', {
+                  void fileLogger.logMatch('WARN', 'update_source_field_missing', {
                     sourceItemId: sourceItem.item_id,
                     expectedField: sourceMatchField,
                     availableFields: sourceItem.fields.map(f => f.external_id),
                   });
 
-                  // Log to failures.log as well
-                  await fileLogger.logFailure('update_source_field_missing', {
+                  // Log to failures.log as well (fire-and-forget for performance)
+                  void fileLogger.logFailure('update_source_field_missing', {
                     sourceItemId: sourceItem.item_id,
                     expectedField: sourceMatchField,
                     availableFields: sourceItem.fields.map(f => f.external_id),

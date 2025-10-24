@@ -613,7 +613,7 @@ export class ItemBatchProcessor extends EventEmitter {
             error: failure.error,
           });
 
-          // Log failed update
+          // Log failed update (with error handling to prevent unhandled rejections)
           const batchItem = batch[failure.index];
           if (this.fileLogger && batchItem) {
             this.fileLogger.logUpdate('ERROR', 'update_item_failed', {
@@ -621,16 +621,16 @@ export class ItemBatchProcessor extends EventEmitter {
               targetItemId: failure.itemId,
               error: failure.error,
               errorCategory: classifiedError.category,
-            });
+            }).catch(() => {});
 
-            // Also log to failures.log
+            // Also log to failures.log (with error handling)
             this.fileLogger.logFailure('update_operation_failed', {
               sourceItemId: batchItem.sourceItemId,
               targetItemId: failure.itemId,
               error: failure.error,
               errorCategory: classifiedError.category,
               fieldsAttempted: Object.keys(batchItem.fields),
-            });
+            }).catch(() => {});
           }
 
           // Record in stats tracker
@@ -653,7 +653,7 @@ export class ItemBatchProcessor extends EventEmitter {
           failed: batchResult.failureCount,
         });
 
-        // Log UPDATE batch completion
+        // Log UPDATE batch completion (with error handling to prevent unhandled rejections)
         if (this.fileLogger) {
           await this.fileLogger.logUpdate('INFO', 'update_batch_complete', {
             batchNumber: batchNum + 1,
@@ -662,7 +662,7 @@ export class ItemBatchProcessor extends EventEmitter {
             totalProcessed: this.stats.processed,
             totalSuccessful: this.stats.successful,
             totalFailed: this.stats.failed,
-          });
+          }).catch(() => {});
         }
 
         // Emit progress

@@ -247,9 +247,9 @@ export class PrefetchCache {
               cachedCount++;
               batchCached++;
 
-              // Debug-level logging for each cached item
+              // Debug-level logging for each cached item (fire-and-forget for performance)
               if (logger) {
-                await logger.logPrefetch('DEBUG', 'prefetch_item_cached', {
+                void logger.logPrefetch('DEBUG', 'prefetch_item_cached', {
                   itemId: item.item_id,
                   matchValue,
                   normalizedKey,
@@ -259,9 +259,9 @@ export class PrefetchCache {
               skippedCount++;
               batchSkipped++;
 
-              // Debug-level logging for skipped items
+              // Debug-level logging for skipped items (fire-and-forget for performance)
               if (logger) {
-                await logger.logPrefetch('DEBUG', 'prefetch_item_skipped', {
+                void logger.logPrefetch('DEBUG', 'prefetch_item_skipped', {
                   itemId: item.item_id,
                   reason: 'no_match_field_value',
                   matchValue,
@@ -272,9 +272,9 @@ export class PrefetchCache {
             skippedCount++;
             batchSkipped++;
 
-            // Debug-level logging for items without match field
+            // Debug-level logging for items without match field (fire-and-forget for performance)
             if (logger) {
-              await logger.logPrefetch('DEBUG', 'prefetch_item_skipped', {
+              void logger.logPrefetch('DEBUG', 'prefetch_item_skipped', {
                 itemId: item.item_id,
                 reason: 'match_field_not_found',
                 matchField,
