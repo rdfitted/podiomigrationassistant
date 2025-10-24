@@ -19,6 +19,7 @@ import { classifyError, ClassifiedError } from './error-classifier';
 import { ErrorCategory, FailedItemDetail } from '../state-store';
 import { MigrationFileLogger } from '../file-logger';
 import { UpdateStatsTracker } from './update-stats-tracker';
+import { forceGC, getMemoryStats } from '../memory-monitor';
 
 /**
  * Batch processor configuration
@@ -324,6 +325,19 @@ export class ItemBatchProcessor extends EventEmitter {
         await this.handlePostBatchRateLimit(batchResult, batchNum, batches, tracker, {
           appId: this.appId,
         });
+
+        // Periodic GC to prevent memory buildup - every 10 batches
+        if ((batchNum + 1) % 10 === 0) {
+          const memStats = getMemoryStats();
+          if (memStats.heapUsedPercent > 70) {
+            migrationLogger.info('Triggering GC after batch processing', {
+              batchNumber: batchNum + 1,
+              heapUsedPercent: Math.round(memStats.heapUsedPercent),
+              heapUsedMB: Math.round(memStats.heapUsedMB),
+            });
+            forceGC();
+          }
+        }
       } catch (error) {
         migrationLogger.error('Batch processing failed', {
           appId: this.appId,
@@ -704,6 +718,19 @@ export class ItemBatchProcessor extends EventEmitter {
           appId: this.appId,
           logUpdateEvent: true,
         });
+
+        // Periodic GC to prevent memory buildup - every 10 batches
+        if ((batchNum + 1) % 10 === 0) {
+          const memStats = getMemoryStats();
+          if (memStats.heapUsedPercent > 70) {
+            migrationLogger.info('Triggering GC after batch processing', {
+              batchNumber: batchNum + 1,
+              heapUsedPercent: Math.round(memStats.heapUsedPercent),
+              heapUsedMB: Math.round(memStats.heapUsedMB),
+            });
+            forceGC();
+          }
+        }
       } catch (error) {
         migrationLogger.error('Batch processing failed', {
           batchNumber: batchNum + 1,

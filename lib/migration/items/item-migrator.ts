@@ -1016,20 +1016,21 @@ export class ItemMigrator {
                   });
 
                   // Use pre-fetch cache for instant O(1) duplicate lookup (NO API call)
-                  const existingItem = prefetchCache?.getExistingItem(matchValue) || null;
+                  // Use getExistingItemId() for memory efficiency (avoids storing full PodioItems)
+                  const existingItemId = prefetchCache?.getExistingItemId(matchValue) || null;
 
                   const traceId = `${migrationJob.id}:${sourceItem.item_id}:${Date.now()}`;
 
                   migrationLogger.debug('Duplicate check - result from prefetch cache', {
                     sourceItemId: sourceItem.item_id,
                     matchValue,
-                    isDuplicate: !!existingItem,
-                    existingItemId: existingItem?.item_id,
+                    isDuplicate: !!existingItemId,
+                    existingItemId: existingItemId,
                     fromCache: true,
                     traceId,
                   });
 
-                  if (existingItem) {
+                  if (existingItemId) {
                     // Duplicate found - log structured event
                     logDuplicateDetection(
                       migrationJob.id,
@@ -1040,7 +1041,7 @@ export class ItemMigrator {
                         matchField: targetMatchField,
                         matchValue,
                         normalizedValue: String(matchValue),
-                        targetItemId: existingItem.item_id,
+                        targetItemId: existingItemId,
                         fromCache: true,
                       }
                     );
@@ -1056,7 +1057,7 @@ export class ItemMigrator {
                           matchField: targetMatchField,
                           matchValue,
                           normalizedValue: String(matchValue),
-                          targetItemId: existingItem.item_id,
+                          targetItemId: existingItemId,
                           fromCache: true,
                         }
                       );
@@ -1218,16 +1219,17 @@ export class ItemMigrator {
                 }
 
                 // Use pre-fetch cache for instant lookup (NO API call)
-                const existingItem = prefetchCache?.getExistingItem(matchValue) || null;
+                // Use getExistingItemId() for memory efficiency (avoids storing full PodioItems)
+                const existingItemId = prefetchCache?.getExistingItemId(matchValue) || null;
 
-                if (existingItem) {
+                if (existingItemId) {
                   // Match found - cache hit (log fire-and-forget for performance)
                   if (fileLogger) {
                     void fileLogger.logMatch('INFO', 'update_match_found', {
                       sourceItemId: sourceItem.item_id,
                       matchField: sourceMatchField,
                       matchValue: maskPII(matchValue),
-                      targetItemId: existingItem.item_id,
+                      targetItemId: existingItemId,
                     });
                   }
 
@@ -1237,7 +1239,7 @@ export class ItemMigrator {
                   }
 
                   itemsToUpdate.push({
-                    itemId: existingItem.item_id,
+                    itemId: existingItemId,
                     fields: mappedFields,
                     sourceItemId: sourceItem.item_id, // Track source item ID for error reporting
                   });
@@ -1246,7 +1248,7 @@ export class ItemMigrator {
                   if (config.dryRun) {
                     dryRunUpdateInfo.push({
                       sourceItem,
-                      targetItem: existingItem,
+                      targetItem: { item_id: existingItemId, fields: [] } as any, // Minimal stub for dry-run
                       matchValue,
                       fields: mappedFields,
                     });
