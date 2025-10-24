@@ -404,7 +404,7 @@ export class PrefetchCache {
 
     // Check TTL expiration
     if (this.isExpired(entry)) {
-      this.cache.delete(normalizedKey);
+      this.cache.delete(this.makeKey(normalizedKey));
       this.misses++;
       migrationLogger.debug('Cache miss - entry expired', {
         matchField: this.matchField,

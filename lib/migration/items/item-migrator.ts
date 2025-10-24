@@ -1140,7 +1140,7 @@ export class ItemMigrator {
                       rawMatchValue: matchValue,
                       matchValueType: typeof matchValue,
                       isArray: Array.isArray(matchValue),
-                      isEmpty: !matchValue || matchValue === '' || matchValue === 0 || matchValue === false,
+                      isEmpty: normalizeForMatch(matchValue) === '',
                       cacheSize: prefetchCache?.size() || 0,
                     });
                   }
@@ -1421,6 +1421,11 @@ export class ItemMigrator {
         duplicatesUpdated: updatedDuplicatesCount,
         cacheStats: prefetchCache?.getCacheStats() || null,
       });
+
+      // Provide total items for stats in UPDATE/UPSERT non-dry-run flows
+      if (updateStatsTracker && (config.mode === 'update' || config.mode === 'upsert') && !config.dryRun) {
+        updateStatsTracker.setTotalItems(itemsToUpdate.length);
+      }
 
       // Validate: Check for items in wrong arrays for the mode (defensive check)
       if (config.mode === 'update' && itemsToCreate.length > 0) {

@@ -71,7 +71,9 @@ export const DEFAULT_LOG_CONFIG: LogConfig = {
  * Get log paths for a specific migration
  */
 export function getMigrationLogPaths(migrationId: string): MigrationLogPaths {
-  const migrationDir = path.join(DEFAULT_LOG_CONFIG.baseDir, migrationId);
+  // Sanitize migrationId to prevent path traversal and invalid filenames
+  const safeId = migrationId.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const migrationDir = path.join(DEFAULT_LOG_CONFIG.baseDir, safeId);
 
   return {
     migrationDir,
