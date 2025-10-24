@@ -158,6 +158,13 @@ export class UpdateStatsTracker {
 
   /**
    * Set total items count
+   *
+   * IMPORTANT: This method should be called before recording any update attempts
+   * to ensure accurate progress calculations (percent complete, ETA). If called
+   * after recording has started, progress metrics may be incorrect until enough
+   * items have been processed to stabilize the calculations.
+   *
+   * @param total - Total number of items to be processed in this migration
    */
   setTotalItems(total: number): void {
     this.totalItems = total;

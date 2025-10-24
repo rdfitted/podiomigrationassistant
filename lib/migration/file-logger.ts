@@ -24,6 +24,21 @@ import {
 
 export type LogStream = 'migration' | 'items' | 'batches' | 'errors' | 'prefetch' | 'matches' | 'updates' | 'failures' | 'stats';
 
+/**
+ * Centralized list of all log streams to prevent drift
+ */
+const ALL_STREAMS: readonly LogStream[] = [
+  'migration',
+  'items',
+  'batches',
+  'errors',
+  'prefetch',
+  'matches',
+  'updates',
+  'failures',
+  'stats',
+] as const;
+
 export interface LogEntry {
   timestamp: string;
   level: LogLevel;
@@ -66,27 +81,27 @@ export class MigrationFileLogger {
   async initialize(): Promise<void> {
     await ensureLogDirectory(this.paths.migrationDir);
 
-    // Initialize write queues
-    this.writeQueues.set('migration', []);
-    this.writeQueues.set('items', []);
-    this.writeQueues.set('batches', []);
-    this.writeQueues.set('errors', []);
-    this.writeQueues.set('prefetch', []);
-    this.writeQueues.set('matches', []);
-    this.writeQueues.set('updates', []);
-    this.writeQueues.set('failures', []);
-    this.writeQueues.set('stats', []);
+    // Initialize write queues for all streams
+    for (const stream of ALL_STREAMS) {
+      this.writeQueues.set(stream, []);
+    }
 
-    // Create write streams
-    await this.createStream('migration', this.paths.migrationLog);
-    await this.createStream('items', this.paths.itemsLog);
-    await this.createStream('batches', this.paths.batchesLog);
-    await this.createStream('errors', this.paths.errorsLog);
-    await this.createStream('prefetch', this.paths.prefetchLog);
-    await this.createStream('matches', this.paths.matchesLog);
-    await this.createStream('updates', this.paths.updatesLog);
-    await this.createStream('failures', this.paths.failuresLog);
-    await this.createStream('stats', this.paths.statsLog);
+    // Create write streams for all streams
+    const streamPaths: Record<LogStream, string> = {
+      migration: this.paths.migrationLog,
+      items: this.paths.itemsLog,
+      batches: this.paths.batchesLog,
+      errors: this.paths.errorsLog,
+      prefetch: this.paths.prefetchLog,
+      matches: this.paths.matchesLog,
+      updates: this.paths.updatesLog,
+      failures: this.paths.failuresLog,
+      stats: this.paths.statsLog,
+    };
+
+    for (const stream of ALL_STREAMS) {
+      await this.createStream(stream, streamPaths[stream]);
+    }
 
     // Start periodic flush (every 1 second)
     this.startPeriodicFlush();
@@ -273,9 +288,13 @@ export class MigrationFileLogger {
       }
     }
 
-    // Flush errors immediately
+    // Flush errors immediately (best-effort, don't throw on failure)
     if (level === 'ERROR') {
-      await this.flush(stream);
+      try {
+        await this.flush(stream);
+      } catch {
+        // Best-effort logging - swallow flush errors
+      }
     }
   }
 
@@ -294,11 +313,12 @@ export class MigrationFileLogger {
     const data = queue.join('');
     queue.length = 0; // Clear queue
 
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
       writeStream.write(data, (error) => {
         if (error) {
           console.error(`Failed to flush ${stream} log:`, error);
-          reject(error);
+          // Best-effort logging - resolve anyway to not affect migration flow
+          resolve();
         } else {
           resolve();
         }
@@ -312,7 +332,7 @@ export class MigrationFileLogger {
   private async flushAll(): Promise<void> {
     const promises: Promise<void>[] = [];
 
-    for (const stream of ['migration', 'items', 'batches', 'errors', 'prefetch', 'matches', 'updates', 'failures', 'stats'] as LogStream[]) {
+    for (const stream of ALL_STREAMS) {
       promises.push(this.flush(stream));
     }
 
@@ -372,15 +392,18 @@ class LoggerRegistry {
    * Get or create a logger for a migration
    */
   async getLogger(migrationId: string): Promise<MigrationFileLogger> {
-    let logger = this.loggers.get(migrationId);
+    const existing = this.loggers.get(migrationId);
+    if (existing) return existing;
 
-    if (!logger) {
-      logger = new MigrationFileLogger(migrationId);
+    const logger = new MigrationFileLogger(migrationId);
+    this.loggers.set(migrationId, logger);
+    try {
       await logger.initialize();
-      this.loggers.set(migrationId, logger);
+      return logger;
+    } catch (e) {
+      this.loggers.delete(migrationId);
+      throw e;
     }
-
-    return logger;
   }
 
   /**
