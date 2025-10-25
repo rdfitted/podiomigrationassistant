@@ -208,12 +208,16 @@ export class PrefetchCache {
    * @param appId - Target app ID
    * @param matchField - Field external_id to use for matching (e.g., 'email', 'title')
    * @param logger - Optional file logger for detailed logging
+   * @param timeoutMs - Optional timeout in milliseconds (default: 4 hours)
+   * @param healthCheckIntervalMs - Optional interval for health checks (default: 5 minutes)
    */
   async prefetchTargetItems(
     client: PodioHttpClient,
     appId: number,
     matchField: string,
-    logger?: MigrationFileLogger
+    logger?: MigrationFileLogger,
+    timeoutMs: number = 14400000, // Default: 4 hours (14400000ms)
+    healthCheckIntervalMs: number = 300000 // Default: 5 minutes
   ): Promise<void> {
     const startTime = Date.now();
     this.matchField = matchField;
@@ -222,12 +226,15 @@ export class PrefetchCache {
     let cachedCount = 0;
     let skippedCount = 0;
     let batchNum = 0;
+    let lastProgressTime = Date.now();
 
     // Log to both migration logger and file logger
     migrationLogger.info('Starting target item pre-fetch', {
       appId,
       matchField,
       timestamp: new Date().toISOString(),
+      timeoutMs,
+      healthCheckIntervalMs,
     });
 
     if (logger) {
@@ -235,14 +242,40 @@ export class PrefetchCache {
         targetAppId: appId,
         matchField,
         timestamp: new Date().toISOString(),
+        timeoutMs,
+        healthCheckIntervalMs,
       });
     }
 
-    try {
-      // Stream all items from target app
-      for await (const batch of streamItems(client, appId, {
-        batchSize: 500,
-      })) {
+    // Timeout wrapper using Promise.race
+    const prefetchPromise = (async () => {
+      try {
+        // Stream all items from target app
+        for await (const batch of streamItems(client, appId, {
+          batchSize: 500,
+        })) {
+          // Health check: Detect if prefetch has stalled
+          const now = Date.now();
+          const timeSinceLastProgress = now - lastProgressTime;
+          const totalElapsed = now - startTime;
+
+          if (timeSinceLastProgress > healthCheckIntervalMs) {
+            const error = new Error(
+              `Prefetch health check failed: No progress for ${Math.round(timeSinceLastProgress / 1000)}s. ` +
+              `Last batch: ${batchNum}, Items: ${itemCount}. This may indicate a network issue or API stall.`
+            );
+            migrationLogger.error('Prefetch stalled - no progress detected', {
+              appId,
+              matchField,
+              batchNum,
+              itemCount,
+              timeSinceLastProgressMs: timeSinceLastProgress,
+              totalElapsedMs: totalElapsed,
+            });
+            throw error;
+          }
+
+          lastProgressTime = now;
         batchNum++;
         let batchCached = 0;
         let batchSkipped = 0;
@@ -373,14 +406,54 @@ export class PrefetchCache {
         });
         forceGC();
       }
-    } catch (error) {
-      migrationLogger.error('Pre-fetch failed', {
-        appId,
-        matchField,
-        itemCount,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      } catch (error) {
+        migrationLogger.error('Pre-fetch failed', {
+          appId,
+          matchField,
+          itemCount,
+          error: error instanceof Error ? error.message : String(error),
+        });
 
+        if (logger) {
+          await logger.logPrefetch('ERROR', 'prefetch_failed', {
+            targetAppId: appId,
+            matchField,
+            totalFetched: itemCount,
+            totalCached: cachedCount,
+            totalSkipped: skippedCount,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+
+        throw error;
+      }
+    })();
+
+    // Timeout promise that rejects after specified timeout
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => {
+        const error = new Error(
+          `Prefetch timeout: Operation exceeded ${Math.round(timeoutMs / 1000)}s limit. ` +
+          `Processed ${itemCount} items in ${batchNum} batches before timeout. ` +
+          `Consider increasing timeout for very large apps or check for API issues.`
+        );
+        migrationLogger.error('Prefetch timeout exceeded', {
+          appId,
+          matchField,
+          timeoutMs,
+          itemCount,
+          batchNum,
+          cachedCount,
+        });
+        reject(error);
+      }, timeoutMs);
+    });
+
+    // Race between prefetch and timeout
+    try {
+      await Promise.race([prefetchPromise, timeoutPromise]);
+    } catch (error) {
+      // Log final error state
       if (logger) {
         await logger.logPrefetch('ERROR', 'prefetch_failed', {
           targetAppId: appId,
@@ -389,9 +462,10 @@ export class PrefetchCache {
           totalCached: cachedCount,
           totalSkipped: skippedCount,
           error: error instanceof Error ? error.message : String(error),
+          isTimeout: error instanceof Error && error.message.includes('timeout'),
+          isHealthCheckFailure: error instanceof Error && error.message.includes('health check'),
         });
       }
-
       throw error;
     }
   }

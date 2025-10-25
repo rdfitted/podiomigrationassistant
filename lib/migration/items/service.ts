@@ -98,6 +98,42 @@ export async function createItemMigrationJob(
     hasBoth: !!(request.sourceMatchField && request.targetMatchField),
   });
 
+  // Check for existing active jobs with same source→target pair
+  logger.info('Checking for duplicate active jobs', {
+    sourceAppId: request.sourceAppId,
+    targetAppId: request.targetAppId,
+  });
+
+  const allJobs = await migrationStateStore.listMigrationJobs();
+  const activeStatuses = ['planning', 'in_progress'];
+  const activeJobsForSameApps = allJobs.filter(job => {
+    const metadata = job.metadata as any;
+    const isSameApps = metadata.sourceAppId === request.sourceAppId &&
+                       metadata.targetAppId === request.targetAppId;
+    const isActive = activeStatuses.includes(job.status);
+    return isSameApps && isActive;
+  });
+
+  if (activeJobsForSameApps.length > 0) {
+    const conflictingJob = activeJobsForSameApps[0];
+    const errorMessage =
+      `Cannot create migration job: An active migration job (${conflictingJob.id}) is already running ` +
+      `for source app ${request.sourceAppId} → target app ${request.targetAppId}. ` +
+      `Status: ${conflictingJob.status}. ` +
+      `Please wait for the existing job to complete or cancel it before starting a new one.`;
+
+    logger.warn('Duplicate job prevention triggered', {
+      requestedSourceAppId: request.sourceAppId,
+      requestedTargetAppId: request.targetAppId,
+      conflictingJobId: conflictingJob.id,
+      conflictingJobStatus: conflictingJob.status,
+    });
+
+    throw new Error(errorMessage);
+  }
+
+  logger.info('No duplicate jobs found, proceeding with job creation');
+
   // Validate match field types if provided
   if (request.sourceMatchField && request.targetMatchField) {
     logger.info('Validating match field types', {
