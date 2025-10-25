@@ -128,6 +128,29 @@ export interface MigrationResult {
   dryRunPreview?: DryRunPreview;
 }
 
+const DRY_RUN_STUB_CREATED_ON = new Date(0).toISOString();
+
+function createDryRunTargetStub(itemId: number, targetAppId: number): PodioItem {
+  return {
+    item_id: itemId,
+    app_item_id: itemId,
+    app: {
+      app_id: targetAppId,
+      config: {
+        name: 'dry-run-stub',
+      },
+    },
+    fields: [],
+    created_on: DRY_RUN_STUB_CREATED_ON,
+    created_by: {
+      user_id: 0,
+      name: 'dry-run-stub',
+    },
+    link: '',
+    rights: [],
+  } as PodioItem;
+}
+
 /**
  * Field change preview for dry-run mode
  */
@@ -543,6 +566,30 @@ export class ItemMigrator {
   }
 
   /**
+   * Hydrate target items for dry-run previews by fetching full Podio items.
+   */
+  private async fetchDryRunTargetItems(targetItemIds: number[]): Promise<Map<number, PodioItem>> {
+    const uniqueIds = Array.from(new Set(targetItemIds)).filter(
+      (id): id is number => typeof id === 'number' && !Number.isNaN(id)
+    );
+
+    if (uniqueIds.length === 0) {
+      return new Map();
+    }
+
+    try {
+      const fetchedItems = await fetchItemsByIds(this.client, uniqueIds);
+      return new Map(fetchedItems.map(item => [item.item_id, item]));
+    } catch (error) {
+      migrationLogger.warn('Failed to hydrate dry-run target items, falling back to stubs', {
+        error: error instanceof Error ? error.message : String(error),
+        requestedIds: uniqueIds.length,
+      });
+      return new Map();
+    }
+  }
+
+  /**
    * Generate a preview for a CREATE operation
    */
   private async generateCreatePreview(
@@ -764,7 +811,7 @@ export class ItemMigrator {
       // Dry-run mode: track additional info for preview
       const dryRunUpdateInfo: Array<{
         sourceItem: PodioItem;
-        targetItem: PodioItem;
+        targetItemId: number;
         matchValue: unknown;
         fields: Record<string, unknown>;
       }> = [];
@@ -1003,12 +1050,15 @@ export class ItemMigrator {
 
                 if (sourceField) {
                   const matchValue = extractFieldValue(sourceField);
+                  const normalizedMatchValue = normalizeForMatch(matchValue);
+                  const maskedMatchValue = maskPII(matchValue);
+                  const maskedNormalizedMatchValue = maskPII(normalizedMatchValue);
 
                   migrationLogger.debug('Duplicate check - extracted match value', {
                     sourceItemId: sourceItem.item_id,
                     sourceMatchField,
                     targetMatchField,
-                    matchValue,
+                    matchValue: maskedMatchValue,
                     matchValueType: typeof matchValue,
                     isArray: Array.isArray(matchValue),
                     duplicateBehavior,
@@ -1016,20 +1066,21 @@ export class ItemMigrator {
                   });
 
                   // Use pre-fetch cache for instant O(1) duplicate lookup (NO API call)
-                  const existingItem = prefetchCache?.getExistingItem(matchValue) || null;
+                  // Use getExistingItemId() for memory efficiency (avoids storing full PodioItems)
+                  const existingItemId = prefetchCache?.getExistingItemId(matchValue) || null;
 
                   const traceId = `${migrationJob.id}:${sourceItem.item_id}:${Date.now()}`;
 
                   migrationLogger.debug('Duplicate check - result from prefetch cache', {
                     sourceItemId: sourceItem.item_id,
-                    matchValue,
-                    isDuplicate: !!existingItem,
-                    existingItemId: existingItem?.item_id,
+                    matchValue: maskedMatchValue,
+                    isDuplicate: !!existingItemId,
+                    existingItemId,
                     fromCache: true,
                     traceId,
                   });
 
-                  if (existingItem) {
+                  if (existingItemId) {
                     // Duplicate found - log structured event
                     logDuplicateDetection(
                       migrationJob.id,
@@ -1038,9 +1089,9 @@ export class ItemMigrator {
                       {
                         sourceItemId: sourceItem.item_id,
                         matchField: targetMatchField,
-                        matchValue,
-                        normalizedValue: String(matchValue),
-                        targetItemId: existingItem.item_id,
+                        matchValue: maskedMatchValue,
+                        normalizedValue: maskedNormalizedMatchValue,
+                        targetItemId: existingItemId,
                         fromCache: true,
                       }
                     );
@@ -1054,9 +1105,9 @@ export class ItemMigrator {
                         {
                           sourceItemId: sourceItem.item_id,
                           matchField: targetMatchField,
-                          matchValue,
-                          normalizedValue: String(matchValue),
-                          targetItemId: existingItem.item_id,
+                          matchValue: maskedMatchValue,
+                          normalizedValue: maskedNormalizedMatchValue,
+                          targetItemId: existingItemId,
                           fromCache: true,
                         }
                       );
@@ -1065,7 +1116,7 @@ export class ItemMigrator {
                       if (config.dryRun) {
                         dryRunSkippedItems.push({
                           sourceItemId: sourceItem.item_id,
-                          targetItemId: existingItem.item_id,
+                          targetItemId: existingItemId,
                           matchValue,
                           reason: `Duplicate found for ${sourceMatchField}=${matchValue} - would be skipped`,
                         });
@@ -1082,7 +1133,7 @@ export class ItemMigrator {
                         continue;
                       } else {
                         throw new Error(
-                          `Duplicate item found for ${sourceMatchField}=${matchValue} (source: ${sourceItem.item_id}, target: ${existingItem.item_id})`
+                          `Duplicate item found for ${sourceMatchField}=${maskedMatchValue} (source: ${sourceItem.item_id}, target: ${existingItemId})`
                         );
                       }
                     } else if (effectiveDuplicateBehavior === 'update') {
@@ -1095,14 +1146,14 @@ export class ItemMigrator {
                         {
                           sourceItemId: sourceItem.item_id,
                           matchField: targetMatchField,
-                          matchValue,
-                          normalizedValue: String(matchValue),
-                          targetItemId: existingItem.item_id,
+                          matchValue: maskedMatchValue,
+                          normalizedValue: maskedNormalizedMatchValue,
+                          targetItemId: existingItemId,
                           fromCache: true,
                         }
                       );
                       itemsToUpdate.push({
-                        itemId: existingItem.item_id,
+                        itemId: existingItemId,
                         fields: mappedFields,
                         sourceItemId: sourceItem.item_id, // Track source item ID for error reporting
                       });
@@ -1111,7 +1162,7 @@ export class ItemMigrator {
                       if (config.dryRun) {
                         dryRunUpdateInfo.push({
                           sourceItem,
-                          targetItem: existingItem,
+                          targetItemId: existingItemId,
                           matchValue,
                           fields: mappedFields,
                         });
@@ -1127,8 +1178,8 @@ export class ItemMigrator {
                       {
                         sourceItemId: sourceItem.item_id,
                         matchField: targetMatchField,
-                        matchValue,
-                        normalizedValue: normalizeForMatch(matchValue),
+                        matchValue: maskedMatchValue,
+                        normalizedValue: maskedNormalizedMatchValue,
                         fromCache: true,
                       }
                     );
@@ -1138,10 +1189,11 @@ export class ItemMigrator {
                       sourceItemId: sourceItem.item_id,
                       sourceMatchField,
                       targetMatchField,
-                      rawMatchValue: matchValue,
+                      rawMatchValue: maskedMatchValue,
                       matchValueType: typeof matchValue,
                       isArray: Array.isArray(matchValue),
-                      isEmpty: normalizeForMatch(matchValue) === '',
+                      isEmpty: normalizedMatchValue === '',
+                      normalizedValue: maskedNormalizedMatchValue,
                       cacheSize: prefetchCache?.size() || 0,
                     });
                   }
@@ -1218,16 +1270,17 @@ export class ItemMigrator {
                 }
 
                 // Use pre-fetch cache for instant lookup (NO API call)
-                const existingItem = prefetchCache?.getExistingItem(matchValue) || null;
+                // Use getExistingItemId() for memory efficiency (avoids storing full PodioItems)
+                const existingItemId = prefetchCache?.getExistingItemId(matchValue) || null;
 
-                if (existingItem) {
+                if (existingItemId) {
                   // Match found - cache hit (log fire-and-forget for performance)
                   if (fileLogger) {
                     void fileLogger.logMatch('INFO', 'update_match_found', {
                       sourceItemId: sourceItem.item_id,
                       matchField: sourceMatchField,
                       matchValue: maskPII(matchValue),
-                      targetItemId: existingItem.item_id,
+                      targetItemId: existingItemId,
                     });
                   }
 
@@ -1237,7 +1290,7 @@ export class ItemMigrator {
                   }
 
                   itemsToUpdate.push({
-                    itemId: existingItem.item_id,
+                    itemId: existingItemId,
                     fields: mappedFields,
                     sourceItemId: sourceItem.item_id, // Track source item ID for error reporting
                   });
@@ -1246,7 +1299,7 @@ export class ItemMigrator {
                   if (config.dryRun) {
                     dryRunUpdateInfo.push({
                       sourceItem,
-                      targetItem: existingItem,
+                      targetItemId: existingItemId,
                       matchValue,
                       fields: mappedFields,
                     });
@@ -1257,7 +1310,7 @@ export class ItemMigrator {
                     sourceItemId: sourceItem.item_id,
                     sourceMatchField,
                     targetMatchField,
-                    matchValue,
+                    matchValue: maskPII(matchValue),
                   });
 
                   // Get current cache stats for diagnostics
@@ -1458,10 +1511,18 @@ export class ItemMigrator {
           const updatePreviews: UpdatePreview[] = [];
           const skippedPreviews: DryRunPreview['wouldSkip'] = [];
 
+          const hydratedTargetItems = await this.fetchDryRunTargetItems(
+            dryRunUpdateInfo.map(info => info.targetItemId)
+          );
+
           for (const updateInfo of dryRunUpdateInfo) {
+            const targetItem =
+              hydratedTargetItems.get(updateInfo.targetItemId) ||
+              createDryRunTargetStub(updateInfo.targetItemId, config.targetAppId);
+
             const preview = await this.generateUpdatePreview(
               updateInfo.sourceItem,
-              updateInfo.targetItem,
+              targetItem,
               updateInfo.fields,
               externalIdFieldMapping,
               updateInfo.matchValue

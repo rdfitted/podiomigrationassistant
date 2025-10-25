@@ -19,6 +19,35 @@ import { classifyError, ClassifiedError } from './error-classifier';
 import { ErrorCategory, FailedItemDetail } from '../state-store';
 import { MigrationFileLogger } from '../file-logger';
 import { UpdateStatsTracker } from './update-stats-tracker';
+import { forceGC, getMemoryStats } from '../memory-monitor';
+
+const PERIODIC_GC_INTERVAL = 10;
+const DEFAULT_GC_THRESHOLD = 70;
+
+function maybeTriggerPeriodicGC(
+  batchIndex: number,
+  context: Record<string, unknown> = {},
+  thresholdPercent = DEFAULT_GC_THRESHOLD
+): void {
+  if ((batchIndex + 1) % PERIODIC_GC_INTERVAL !== 0) {
+    return;
+  }
+
+  const memStats = getMemoryStats();
+  if (memStats.heapUsedPercent <= thresholdPercent) {
+    return;
+  }
+
+  migrationLogger.info('Triggering GC after batch processing', {
+    batchNumber: batchIndex + 1,
+    heapUsedPercent: Number(memStats.heapUsedPercent.toFixed(1)),
+    heapUsedMB: Number(memStats.heapUsedMB.toFixed(1)),
+    thresholdPercent,
+    ...context,
+  });
+
+  forceGC();
+}
 
 /**
  * Batch processor configuration
@@ -324,6 +353,9 @@ export class ItemBatchProcessor extends EventEmitter {
         await this.handlePostBatchRateLimit(batchResult, batchNum, batches, tracker, {
           appId: this.appId,
         });
+
+        // Periodic GC to prevent memory buildup - every 10 batches
+        maybeTriggerPeriodicGC(batchNum, { appId: this.appId });
       } catch (error) {
         migrationLogger.error('Batch processing failed', {
           appId: this.appId,
@@ -704,6 +736,9 @@ export class ItemBatchProcessor extends EventEmitter {
           appId: this.appId,
           logUpdateEvent: true,
         });
+
+        // Periodic GC to prevent memory buildup - every 10 batches
+        maybeTriggerPeriodicGC(batchNum, { appId: this.appId, mode: 'update' });
       } catch (error) {
         migrationLogger.error('Batch processing failed', {
           batchNumber: batchNum + 1,
