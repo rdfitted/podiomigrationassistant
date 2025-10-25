@@ -83,11 +83,12 @@ function normalizeValue(value: unknown): string {
   if (typeof value === 'string') {
     const trimmed = value.trim();
 
-    // Try to parse as number
-    const parsed = parseFloat(trimmed);
-    if (!isNaN(parsed)) {
-      // Keep canonical numeric form (e.g., "678.90" -> "678.9")
-      return String(parsed);
+    if (trimmed !== '') {
+      const numericValue = Number(trimmed);
+      if (Number.isFinite(numericValue)) {
+        // Keep canonical numeric form (e.g., "678.90" -> "678.9")
+        return String(numericValue);
+      }
     }
 
     // Not a number - normalize as text (lowercase, trim edges only)
@@ -429,13 +430,15 @@ export class PrefetchCache {
    */
   isDuplicate(matchValue: unknown): boolean {
     const normalizedKey = normalizeValue(matchValue);
+    const maskedMatchValue = maskPII(matchValue);
+    const maskedNormalizedKey = maskPII(normalizedKey);
 
     // Skip empty values - don't match empty to empty
     if (!normalizedKey || normalizedKey === '') {
       this.misses++;
       migrationLogger.debug('Skipping empty match value', {
         matchField: this.matchField,
-        matchValue,
+        matchValue: maskedMatchValue,
         reason: 'Empty values (null, undefined, "") are not matched',
       });
       return false;
@@ -447,8 +450,8 @@ export class PrefetchCache {
       this.misses++;
       migrationLogger.debug('Cache miss - no entry', {
         matchField: this.matchField,
-        matchValue,
-        normalizedKey,
+        matchValue: maskedMatchValue,
+        normalizedKey: maskedNormalizedKey,
       });
       return false;
     }
@@ -459,8 +462,8 @@ export class PrefetchCache {
       this.misses++;
       migrationLogger.debug('Cache miss - entry expired', {
         matchField: this.matchField,
-        matchValue,
-        normalizedKey,
+        matchValue: maskedMatchValue,
+        normalizedKey: maskedNormalizedKey,
         ageMs: Date.now() - entry.createdAt,
         ttlMs: this.config.ttlMs,
       });
@@ -471,8 +474,8 @@ export class PrefetchCache {
     this.hits++;
     migrationLogger.debug('Cache hit', {
       matchField: this.matchField,
-      matchValue,
-      normalizedKey,
+      matchValue: maskedMatchValue,
+      normalizedKey: maskedNormalizedKey,
     });
 
     return true;
@@ -490,13 +493,15 @@ export class PrefetchCache {
    */
   getExistingItemId(matchValue: unknown): number | null {
     const normalizedKey = normalizeValue(matchValue);
+    const maskedMatchValue = maskPII(matchValue);
+    const maskedNormalizedKey = maskPII(normalizedKey);
 
     // Skip empty values - don't match empty to empty
     if (!normalizedKey || normalizedKey === '') {
       this.misses++;
       migrationLogger.debug('Skipping empty match value', {
         matchField: this.matchField,
-        matchValue,
+        matchValue: maskedMatchValue,
         reason: 'Empty values (null, undefined, "") are not matched',
       });
       return null;
@@ -515,8 +520,8 @@ export class PrefetchCache {
       this.misses++;
       migrationLogger.debug('Cache miss - entry expired', {
         matchField: this.matchField,
-        matchValue,
-        normalizedKey,
+        matchValue: maskedMatchValue,
+        normalizedKey: maskedNormalizedKey,
         ageMs: Date.now() - entry.createdAt,
         ttlMs: this.config.ttlMs,
       });
@@ -526,8 +531,8 @@ export class PrefetchCache {
     this.hits++;
     migrationLogger.debug('Cache hit - item found', {
       matchField: this.matchField,
-      matchValue,
-      normalizedKey,
+      matchValue: maskedMatchValue,
+      normalizedKey: maskedNormalizedKey,
       itemId: entry.itemId,
     });
 
