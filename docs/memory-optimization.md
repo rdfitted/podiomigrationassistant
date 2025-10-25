@@ -202,7 +202,7 @@ The memory optimizations have minimal performance impact:
 ## Future Improvements
 
 Possible enhancements:
-- Implement LRU eviction for very large caches
+- Implement LRU eviction for 100K+ item caches
 - Add cache streaming/chunking for 100K+ items
 - Compress match values in cache
 - Add memory profiling endpoints

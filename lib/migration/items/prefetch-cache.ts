@@ -14,6 +14,7 @@ import { PodioItem, streamItems, extractFieldValue } from '../../podio/resources
 import { logger as migrationLogger } from '../logging';
 import { MigrationFileLogger } from '../file-logger';
 import { maskPII } from '../utils/pii-masking';
+import { forceGC } from '../memory-monitor';
 
 /**
  * Normalize a value for consistent matching
@@ -336,7 +337,7 @@ export class PrefetchCache {
 
       // Calculate estimated memory usage
       const estimatedMemoryBytes = this.estimateMemoryUsage();
-      const estimatedMemoryMB = estimatedMemoryBytes / (1024 * 1024);
+      const estimatedMemoryMB = Math.round((estimatedMemoryBytes / (1024 * 1024)) * 100) / 100;
 
       migrationLogger.info('Pre-fetch complete', {
         appId,
@@ -347,7 +348,7 @@ export class PrefetchCache {
         uniqueKeys: this.cache.size,
         durationMs: duration,
         itemsPerSecond: itemCount > 0 ? Math.round(itemCount / (duration / 1000)) : 0,
-        estimatedMemoryMB: Math.round(estimatedMemoryMB * 100) / 100,
+        estimatedMemoryMB,
       });
 
       if (logger) {
@@ -360,16 +361,16 @@ export class PrefetchCache {
           uniqueKeys: this.cache.size,
           durationMs: duration,
           itemsPerSecond: itemCount > 0 ? Math.round(itemCount / (duration / 1000)) : 0,
-          estimatedMemoryMB: Math.round(estimatedMemoryMB * 100) / 100,
+          estimatedMemoryMB,
         });
       }
 
       // Suggest garbage collection after large prefetch
-      if (estimatedMemoryMB > 100 && global.gc) {
+      if (estimatedMemoryMB > 100) {
         migrationLogger.info('Running garbage collection after large prefetch', {
           estimatedMemoryMB: Math.round(estimatedMemoryMB),
         });
-        global.gc();
+        forceGC();
       }
     } catch (error) {
       migrationLogger.error('Pre-fetch failed', {
@@ -570,7 +571,7 @@ export class PrefetchCache {
     }
 
     const estimatedMemoryBytes = this.estimateMemoryUsage();
-    const estimatedMemoryMB = estimatedMemoryBytes / (1024 * 1024);
+    const estimatedMemoryMB = Math.round((estimatedMemoryBytes / (1024 * 1024)) * 100) / 100;
 
     return {
       totalItems: this.size(),
@@ -601,7 +602,7 @@ export class PrefetchCache {
       matchField: this.matchField,
       ...stats,
       hitRatePercent: Math.round(stats.hitRate * 100),
-      estimatedMemoryMB: stats.estimatedMemoryMB ? Math.round(stats.estimatedMemoryMB * 100) / 100 : 0,
+      estimatedMemoryMB: stats.estimatedMemoryMB,
     });
   }
 
