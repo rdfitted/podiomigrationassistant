@@ -4,11 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "NODE_OPTIONS='--expose-gc' next dev --turbo",
-    "dev:no-gc": "next dev --turbo",
+    "dev": "next dev --turbo",
     "build": "next build",
-    "start": "NODE_OPTIONS='--expose-gc' next start",
-    "start:no-gc": "next start",
+    "start": "next start",
     "lint": "next lint",
     "reconstruct-failed": "node scripts/reconstruct-failed-items.mjs"
   },

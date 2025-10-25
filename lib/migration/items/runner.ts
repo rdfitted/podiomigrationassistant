@@ -14,7 +14,6 @@ import {
   isPauseRequested,
 } from '../shutdown-handler';
 import { ThroughputCalculator } from './throughput-calculator';
-import { MemoryMonitor, logMemoryStats, forceGC } from '../memory-monitor';
 
 /**
  * Run an item migration job in the background
@@ -22,18 +21,6 @@ import { MemoryMonitor, logMemoryStats, forceGC } from '../memory-monitor';
  */
 export async function runItemMigrationJob(jobId: string): Promise<void> {
   logger.info('Starting item migration job execution', { jobId });
-
-  // Log initial memory usage
-  logMemoryStats('migration_start');
-
-  // Start memory monitoring
-  const memoryMonitor = new MemoryMonitor({
-    warningThreshold: 75,   // Warn at 75% heap usage
-    criticalThreshold: 85,  // Critical at 85% heap usage
-    checkInterval: 30000,   // Check every 30 seconds
-    autoGC: true,          // Auto-trigger GC when critical
-  });
-  memoryMonitor.start(`migration:${jobId}`);
 
   // Register migration as active
   registerActiveMigration(jobId);
@@ -279,13 +266,6 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
 
     throw error;
   } finally {
-    // Stop memory monitoring
-    memoryMonitor.stop();
-
-    // Log final memory usage and trigger GC
-    logMemoryStats('migration_end');
-    forceGC();
-
     // Always unregister migration when done
     unregisterActiveMigration(jobId);
   }

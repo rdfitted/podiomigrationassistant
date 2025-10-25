@@ -109,25 +109,7 @@ export function normalizeForMatch(value: unknown): string {
 }
 
 /**
- * Slim cache entry - stores only essential data to minimize memory usage
- * Instead of storing the full PodioItem (with all fields, metadata, etc.),
- * we only store the item_id which is sufficient for duplicate detection.
- * This reduces memory consumption by ~90% for large datasets.
- */
-interface SlimCacheEntry {
-  /** Target item ID (for duplicate detection) */
-  itemId: number;
-  /** Original match value (for debugging/logging) */
-  matchValue: unknown;
-  /** Creation timestamp (for TTL tracking) */
-  createdAt: number; // Use number (timestamp) instead of Date to save memory
-  /** App ID (for multi-app cache support) */
-  appId?: number;
-}
-
-/**
- * Legacy cache entry with metadata for TTL tracking
- * @deprecated Use SlimCacheEntry instead for better memory efficiency
+ * Cache entry with metadata for TTL tracking
  */
 interface CacheEntry<T> {
   value: T;
@@ -155,8 +137,6 @@ export interface CacheStats {
   hitRate: number;
   ageMs: number; // Age of oldest entry in cache
   oldestEntryAge: number; // Age of oldest entry
-  estimatedMemoryBytes?: number; // Estimated memory usage in bytes
-  estimatedMemoryMB?: number; // Estimated memory usage in MB
 }
 
 /**
@@ -175,8 +155,7 @@ export interface CacheStats {
  * ```
  */
 export class PrefetchCache {
-  // Use slim cache entries to minimize memory usage
-  private cache: Map<string, SlimCacheEntry> = new Map();
+  private cache: Map<string, CacheEntry<PodioItem>> = new Map();
   private matchField: string = '';
   private hits: number = 0;
   private misses: number = 0;
@@ -258,12 +237,12 @@ export class PrefetchCache {
 
             // Skip empty values when building cache
             if (normalizedKey && normalizedKey !== '') {
-              // Store SLIM cache entry - only item_id and match value
-              // This reduces memory usage by ~90% compared to storing full PodioItem
+              // Store item in cache with metadata
+              const now = new Date();
               this.cache.set(this.makeKey(normalizedKey), {
-                itemId: item.item_id,
-                matchValue,
-                createdAt: Date.now(),
+                value: item,
+                createdAt: now,
+                lastAccessedAt: now,
                 appId,
               });
               cachedCount++;
@@ -334,10 +313,6 @@ export class PrefetchCache {
 
       const duration = Date.now() - startTime;
 
-      // Calculate estimated memory usage
-      const estimatedMemoryBytes = this.estimateMemoryUsage();
-      const estimatedMemoryMB = estimatedMemoryBytes / (1024 * 1024);
-
       migrationLogger.info('Pre-fetch complete', {
         appId,
         matchField,
@@ -347,7 +322,6 @@ export class PrefetchCache {
         uniqueKeys: this.cache.size,
         durationMs: duration,
         itemsPerSecond: itemCount > 0 ? Math.round(itemCount / (duration / 1000)) : 0,
-        estimatedMemoryMB: Math.round(estimatedMemoryMB * 100) / 100,
       });
 
       if (logger) {
@@ -360,16 +334,7 @@ export class PrefetchCache {
           uniqueKeys: this.cache.size,
           durationMs: duration,
           itemsPerSecond: itemCount > 0 ? Math.round(itemCount / (duration / 1000)) : 0,
-          estimatedMemoryMB: Math.round(estimatedMemoryMB * 100) / 100,
         });
-      }
-
-      // Suggest garbage collection after large prefetch
-      if (estimatedMemoryMB > 100 && global.gc) {
-        migrationLogger.info('Running garbage collection after large prefetch', {
-          estimatedMemoryMB: Math.round(estimatedMemoryMB),
-        });
-        global.gc();
       }
     } catch (error) {
       migrationLogger.error('Pre-fetch failed', {
@@ -400,23 +365,9 @@ export class PrefetchCache {
    * @param entry - Cache entry to check
    * @returns True if entry is expired, false otherwise
    */
-  private isExpired(entry: SlimCacheEntry): boolean {
-    const ageMs = Date.now() - entry.createdAt;
+  private isExpired(entry: CacheEntry<PodioItem>): boolean {
+    const ageMs = Date.now() - entry.createdAt.getTime();
     return ageMs > this.config.ttlMs;
-  }
-
-  /**
-   * Estimate memory usage of the cache
-   * This is a rough estimate based on:
-   * - Map overhead: ~100 bytes per entry
-   * - Key string: ~50 bytes average
-   * - SlimCacheEntry: ~100 bytes (itemId + matchValue + timestamps)
-   *
-   * @returns Estimated memory usage in bytes
-   */
-  private estimateMemoryUsage(): number {
-    const BYTES_PER_ENTRY = 250; // Conservative estimate
-    return this.cache.size * BYTES_PER_ENTRY;
   }
 
   /**
@@ -460,13 +411,14 @@ export class PrefetchCache {
         matchField: this.matchField,
         matchValue,
         normalizedKey,
-        ageMs: Date.now() - entry.createdAt,
+        ageMs: Date.now() - entry.createdAt.getTime(),
         ttlMs: this.config.ttlMs,
       });
       return false;
     }
 
-    // No need to update last accessed time in slim cache (saves memory)
+    // Update last accessed time
+    entry.lastAccessedAt = new Date();
     this.hits++;
     migrationLogger.debug('Cache hit', {
       matchField: this.matchField,
@@ -478,16 +430,13 @@ export class PrefetchCache {
   }
 
   /**
-   * Get the existing item ID with this match value (if any)
+   * Get the existing item with this match value (if any)
    * Returns null if match value is empty (we don't match empties to empties)
    *
-   * Note: This now returns item_id instead of full PodioItem to save memory.
-   * The item_id is sufficient for duplicate detection in UPDATE mode.
-   *
    * @param matchValue - Value to search for (will be normalized)
-   * @returns Existing item ID or null
+   * @returns Existing PodioItem or null
    */
-  getExistingItemId(matchValue: unknown): number | null {
+  getExistingItem(matchValue: unknown): PodioItem | null {
     const normalizedKey = normalizeValue(matchValue);
 
     // Skip empty values - don't match empty to empty
@@ -516,41 +465,23 @@ export class PrefetchCache {
         matchField: this.matchField,
         matchValue,
         normalizedKey,
-        ageMs: Date.now() - entry.createdAt,
+        ageMs: Date.now() - entry.createdAt.getTime(),
         ttlMs: this.config.ttlMs,
       });
       return null;
     }
 
+    // Update last accessed time
+    entry.lastAccessedAt = new Date();
     this.hits++;
     migrationLogger.debug('Cache hit - item found', {
       matchField: this.matchField,
       matchValue,
       normalizedKey,
-      itemId: entry.itemId,
+      itemId: entry.value.item_id,
     });
 
-    return entry.itemId;
-  }
-
-  /**
-   * Legacy method for backward compatibility
-   * @deprecated Use getExistingItemId() instead for better memory efficiency
-   */
-  getExistingItem(matchValue: unknown): PodioItem | null {
-    // For backward compatibility, return null
-    // Callers should migrate to getExistingItemId()
-    const itemId = this.getExistingItemId(matchValue);
-    if (itemId === null) {
-      return null;
-    }
-
-    // We no longer store full PodioItems, so we can't return them
-    // Return a minimal stub for backward compatibility
-    return {
-      item_id: itemId,
-      fields: [],
-    } as PodioItem;
+    return entry.value;
   }
 
   /**
@@ -563,14 +494,11 @@ export class PrefetchCache {
     // Calculate age metrics
     let oldestEntryAge = 0;
     for (const entry of this.cache.values()) {
-      const age = now - entry.createdAt;
+      const age = now - entry.createdAt.getTime();
       if (age > oldestEntryAge) {
         oldestEntryAge = age;
       }
     }
-
-    const estimatedMemoryBytes = this.estimateMemoryUsage();
-    const estimatedMemoryMB = estimatedMemoryBytes / (1024 * 1024);
 
     return {
       totalItems: this.size(),
@@ -580,8 +508,6 @@ export class PrefetchCache {
       hitRate: total > 0 ? this.hits / total : 0,
       ageMs: oldestEntryAge,
       oldestEntryAge,
-      estimatedMemoryBytes,
-      estimatedMemoryMB,
     };
   }
 
@@ -601,7 +527,6 @@ export class PrefetchCache {
       matchField: this.matchField,
       ...stats,
       hitRatePercent: Math.round(stats.hitRate * 100),
-      estimatedMemoryMB: stats.estimatedMemoryMB ? Math.round(stats.estimatedMemoryMB * 100) / 100 : 0,
     });
   }
 
