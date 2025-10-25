@@ -4,9 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "next dev --turbo",
+    "dev": "cross-env NODE_OPTIONS=--expose-gc next dev --turbo",
+    "dev:no-gc": "next dev --turbo",
     "build": "next build",
-    "start": "next start",
+    "start": "cross-env NODE_OPTIONS=--expose-gc next start",
+    "start:no-gc": "next start",
     "lint": "next lint",
     "reconstruct-failed": "node scripts/reconstruct-failed-items.mjs"
   },
@@ -30,6 +32,7 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "autoprefixer": "^10.4.0",
+    "cross-env": "^7.0.3",
     "eslint": "^8.0.0",
     "eslint-config-next": "^15.0.0",
     "postcss": "^8.4.0",
