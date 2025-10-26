@@ -23,11 +23,17 @@ import { ItemBatchProcessor, BatchProcessorConfig } from './batch-processor';
 import { migrationStateStore, MigrationJob } from '../state-store';
 import { logger as migrationLogger, logMigrationEvent, logDuplicateDetection } from '../logging';
 import { convertFieldMappingToExternalIds } from './service';
-import { PrefetchCache, normalizeForMatch } from './prefetch-cache';
+import {
+  PrefetchCache,
+  normalizeForMatch,
+  PrefetchHealthCheckError,
+  PrefetchRunStats,
+  PrefetchTimeoutError,
+} from './prefetch-cache';
 import { getAppStructureCache } from './app-structure-cache';
 import { isFieldNotFoundError } from '../../podio/errors';
 import { getMigrationLogger, removeMigrationLogger, MigrationFileLogger } from '../file-logger';
-import { UpdateStatsTracker, PrefetchStats } from './update-stats-tracker';
+import { UpdateStatsTracker } from './update-stats-tracker';
 import { maskPII } from '../utils/pii-masking';
 
 /**
@@ -78,6 +84,10 @@ export interface MigrationConfig {
   transferFiles?: boolean;
   /** Progress callback */
   onProgress?: (progress: { total: number; processed: number; successful: number; failed: number }) => void | Promise<void>;
+  /** Optional override for target prefetch timeout (ms). Default: 4 hours */
+  prefetchTimeoutMs?: number;
+  /** Optional override for prefetch health check interval (ms). Default: 5 minutes */
+  prefetchHealthCheckIntervalMs?: number;
 }
 
 /**
@@ -857,13 +867,14 @@ export class ItemMigrator {
 
         const prefetchStartTime = Date.now();
         try {
-          await prefetchCache.prefetchTargetItems(
+          const prefetchStats: PrefetchRunStats = await prefetchCache.prefetchTargetItems(
             this.client,
             config.targetAppId,
             targetMatchField,
-            fileLogger || undefined  // Pass logger for UPDATE mode logging
+            fileLogger || undefined,  // Pass logger for UPDATE mode logging
+            config.prefetchTimeoutMs,
+            config.prefetchHealthCheckIntervalMs
           );
-          const prefetchDuration = Date.now() - prefetchStartTime;
 
           // ADDED: Enhanced logging with cache statistics
           const cacheStats = prefetchCache.getCacheStats();
@@ -871,6 +882,7 @@ export class ItemMigrator {
             targetAppId: config.targetAppId,
             matchField: targetMatchField,
             cachedItems: prefetchCache.size(),
+            stats: prefetchStats,
             cacheStats: {
               uniqueKeys: cacheStats.uniqueKeys,
               totalItems: cacheStats.totalItems,
@@ -881,20 +893,12 @@ export class ItemMigrator {
 
           // Record prefetch stats in UPDATE stats tracker
           if (updateStatsTracker) {
-            const prefetchStats: PrefetchStats = {
-              totalFetched: cacheStats.totalItems,
-              totalCached: prefetchCache.size(),
-              totalSkipped: cacheStats.totalItems - prefetchCache.size(),
-              uniqueKeys: cacheStats.uniqueKeys,
-              durationMs: prefetchDuration,
-              itemsPerSecond: cacheStats.totalItems > 0 ? Math.round(cacheStats.totalItems / (prefetchDuration / 1000)) : 0,
-            };
             updateStatsTracker.recordPrefetchComplete(prefetchStats);
           }
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : String(error);
-          const isTimeout = errorMessage.includes('timeout');
-          const isHealthCheck = errorMessage.includes('health check');
+          const isTimeout = error instanceof PrefetchTimeoutError;
+          const isHealthCheck = error instanceof PrefetchHealthCheckError;
 
           migrationLogger.error('Pre-fetch failed - migration cannot continue', {
             targetAppId: config.targetAppId,
@@ -923,7 +927,8 @@ export class ItemMigrator {
             enrichedMessage += 'Please check your network connection and try again.';
           }
 
-          throw new Error(enrichedMessage);
+          const cause = error instanceof Error ? error : new Error(errorMessage);
+          throw new Error(enrichedMessage, { cause });
         }
       }
 
