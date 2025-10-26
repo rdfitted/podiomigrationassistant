@@ -107,7 +107,11 @@ export async function createItemMigrationJob(
   const allJobs = await migrationStateStore.listMigrationJobs();
   const activeStatuses = ['planning', 'in_progress'];
   const activeJobsForSameApps = allJobs.filter(job => {
-    const metadata = job.metadata as any;
+    const metadata = job.metadata as { sourceAppId?: string; targetAppId?: string } | null | undefined;
+    if (!metadata || typeof metadata !== 'object') {
+      return false;
+    }
+
     const isSameApps = metadata.sourceAppId === request.sourceAppId &&
                        metadata.targetAppId === request.targetAppId;
     const isActive = activeStatuses.includes(job.status);

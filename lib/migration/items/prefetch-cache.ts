@@ -430,8 +430,9 @@ export class PrefetchCache {
     })();
 
     // Timeout promise that rejects after specified timeout
+    let timeoutHandle: NodeJS.Timeout | null = null;
     const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => {
+      timeoutHandle = setTimeout(() => {
         const error = new Error(
           `Prefetch timeout: Operation exceeded ${Math.round(timeoutMs / 1000)}s limit. ` +
           `Processed ${itemCount} items in ${batchNum} batches before timeout. ` +
@@ -467,6 +468,10 @@ export class PrefetchCache {
         });
       }
       throw error;
+    } finally {
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
     }
   }
 
