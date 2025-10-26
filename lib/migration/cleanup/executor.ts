@@ -331,6 +331,7 @@ export class CleanupExecutor extends EventEmitter {
           successful: deletedItems,
           failed: failedDeletions,
           percent,
+          lastUpdate: new Date(),
         });
 
         this.emit('progress', {
@@ -450,6 +451,7 @@ export async function executeCleanup(
         successful: stats.deletedItems,
         failed: stats.failedDeletions,
         percent: stats.percent,
+        lastUpdate: new Date(),
       });
     });
 

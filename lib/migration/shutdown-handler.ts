@@ -9,6 +9,7 @@
 import { migrationStateStore } from './state-store';
 import { shutdownAllLoggers } from './file-logger';
 import { logger } from './logging';
+import { isJobActive } from './job-lifecycle';
 
 /**
  * Pause request registry for UI-triggered pauses
@@ -280,38 +281,123 @@ export async function triggerGracefulShutdown(): Promise<void> {
  * Returns a promise that resolves when the migration is paused
  */
 export async function pauseMigration(migrationId: string): Promise<void> {
-  // Request pause
-  requestMigrationPause(migrationId);
+  logger.info('Pause request initiated', { migrationId });
 
-  logger.info('Waiting for migration to pause', { migrationId });
+  // Get initial job state
+  const job = await migrationStateStore.getMigrationJob(migrationId);
+
+  // Handle corrupted/missing job file gracefully
+  if (!job) {
+    logger.error('Cannot pause migration: job file not found or corrupted', {
+      migrationId,
+      message: 'The migration job file may be corrupted or missing. This can happen with very large migrations.',
+    });
+    throw new Error(
+      `Migration not found: ${migrationId}. The job file may be corrupted. ` +
+      `Check data/migrations/${migrationId}.json for issues.`
+    );
+  }
+
+  // If job is already paused/cancelled/completed, return immediately
+  if (job.status === 'paused' || job.status === 'cancelled') {
+    logger.info('Migration already in stopped state', { migrationId, status: job.status });
+    clearPauseRequest(migrationId);
+    return;
+  }
+
+  if (job.status === 'completed' || job.status === 'failed') {
+    logger.info('Migration already in terminal state', { migrationId, status: job.status });
+    clearPauseRequest(migrationId);
+    return;
+  }
+
+  // Check if job is actually running (heartbeat-based)
+  const isRunning = await isJobActive(migrationId);
+
+  if (!isRunning) {
+    // Job is in 'in_progress' state but not actually running (stale/orphaned)
+    logger.warn('Job is not actually running (no recent heartbeat), force-marking as paused', {
+      migrationId,
+      status: job.status,
+      lastHeartbeat: job.lastHeartbeat,
+    });
+
+    // Force-mark as cancelled since it wasn't actually running
+    await migrationStateStore.updateJobStatus(migrationId, 'cancelled', new Date());
+    await migrationStateStore.addMigrationError(
+      migrationId,
+      'pause_operation',
+      'Job was in "' + job.status + '" status but was not actually running (no recent heartbeat). ' +
+        'Marked as cancelled during pause request.',
+      'STALE_JOB_FORCE_CANCELLED'
+    );
+
+    clearPauseRequest(migrationId);
+    logger.info('Orphaned job force-cancelled successfully', { migrationId });
+    return;
+  }
+
+  // Job is actually running - request graceful pause
+  requestMigrationPause(migrationId);
+  logger.info('Waiting for active migration to pause gracefully', { migrationId });
 
   // Wait for migration to reach 'paused' state (with timeout)
-  const timeout = 300000; // 5 minutes (increased from 60 seconds to handle long-running streaming phases)
+  const timeout = 60000; // 60 seconds (reduced from 5 minutes)
   const startTime = Date.now();
+  let checkCount = 0;
 
   while (Date.now() - startTime < timeout) {
-    const job = await migrationStateStore.getMigrationJob(migrationId);
+    const currentJob = await migrationStateStore.getMigrationJob(migrationId);
 
-    if (!job) {
-      throw new Error(`Migration not found: ${migrationId}`);
+    // Handle job file corruption during pause
+    if (!currentJob) {
+      logger.error('Job file became corrupted during pause operation', { migrationId });
+      throw new Error(
+        `Migration job file became corrupted during pause: ${migrationId}. ` +
+        `The job may have been processing a very large batch. Check data/migrations/ for backup files.`
+      );
     }
 
-    if (job.status === 'paused' || job.status === 'cancelled') {
-      logger.info('Migration stopped successfully', { migrationId, status: job.status });
+    if (currentJob.status === 'paused' || currentJob.status === 'cancelled') {
+      logger.info('Migration stopped successfully', { migrationId, status: currentJob.status });
       clearPauseRequest(migrationId);
       return;
     }
 
-    if (job.status === 'completed' || job.status === 'failed') {
-      logger.warn('Migration completed before stop', { migrationId, status: job.status });
+    if (currentJob.status === 'completed' || currentJob.status === 'failed') {
+      logger.info('Migration completed during pause', { migrationId, status: currentJob.status });
       clearPauseRequest(migrationId);
       return;
+    }
+
+    // Log progress every 10 seconds
+    checkCount++;
+    if (checkCount % 10 === 0) {
+      logger.info('Still waiting for migration to pause', {
+        migrationId,
+        status: currentJob.status,
+        elapsedSeconds: Math.round((Date.now() - startTime) / 1000),
+        timeoutSeconds: Math.round(timeout / 1000),
+      });
     }
 
     // Wait 1 second before checking again
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
 
-  // Timeout reached
-  throw new Error(`Timeout waiting for migration ${migrationId} to stop`);
+  // Timeout reached - log detailed error
+  const finalJob = await migrationStateStore.getMigrationJob(migrationId);
+  logger.error('Timeout waiting for migration to pause', {
+    migrationId,
+    currentStatus: finalJob?.status,
+    lastHeartbeat: finalJob?.lastHeartbeat,
+    timeoutSeconds: timeout / 1000,
+    message: 'The migration did not respond to the pause request within the timeout period.',
+  });
+
+  throw new Error(
+    `Timeout waiting for migration ${migrationId} to stop after ${timeout / 1000} seconds. ` +
+    `Current status: ${finalJob?.status}. The migration may be processing a large batch. ` +
+    `You can try again or use the admin API to force-cancel the job.`
+  );
 }

@@ -133,6 +133,7 @@ export interface MigrationJob {
   status: MigrationJobStatus;
   startedAt: Date;
   completedAt?: Date;
+  lastHeartbeat?: Date;
   steps: MigrationStep[];
   errors: MigrationError[];
   progress?: MigrationProgress;
@@ -203,7 +204,8 @@ export class MigrationStateStore {
    */
   async saveMigrationJob(job: MigrationJob): Promise<void> {
     const jobPath = this.getJobPath(job.id);
-    const tempPath = `${jobPath}.tmp`;
+    // Use unique temp path to prevent concurrent write collisions
+    const tempPath = `${jobPath}.${crypto.randomUUID()}.tmp`;
     const MAX_RETRIES = 3;
     let lastError: Error | null = null;
 
@@ -252,22 +254,7 @@ export class MigrationStateStore {
       } catch (error) {
         lastError = error as Error;
 
-        // Handle race condition: if temp file doesn't exist, it might have been
-        // renamed by a concurrent save operation. Check if final file exists.
-        const isRenameError = (error as NodeJS.ErrnoException).code === 'ENOENT' &&
-                             (error as NodeJS.ErrnoException).syscall === 'rename';
-
-        if (isRenameError) {
-          try {
-            // Check if final file exists (concurrent save succeeded)
-            await fs.access(jobPath);
-            logger.debug('Saved migration job (concurrent save detected)', { jobId: job.id });
-            return; // Final file exists, consider this a success
-          } catch {
-            // Final file doesn't exist either, this is a real error
-          }
-        }
-
+        // With unique temp files, cross-writer rename collisions are eliminated
         // Log retry attempt
         if (attempt < MAX_RETRIES) {
           logger.warn('Failed to save migration job, retrying', {
@@ -321,6 +308,9 @@ export class MigrationStateStore {
       job.startedAt = new Date(job.startedAt);
       if (job.completedAt) {
         job.completedAt = new Date(job.completedAt);
+      }
+      if (job.lastHeartbeat) {
+        job.lastHeartbeat = new Date(job.lastHeartbeat);
       }
       if (job.progress?.lastUpdate) {
         job.progress.lastUpdate = new Date(job.progress.lastUpdate);
@@ -412,6 +402,13 @@ export class MigrationStateStore {
     job.status = status;
     if (completedAt) {
       job.completedAt = completedAt;
+    }
+
+    // Seed heartbeat when entering in_progress, clear on terminal/pause states
+    if (status === 'in_progress') {
+      job.lastHeartbeat = new Date();
+    } else if (status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'paused') {
+      job.lastHeartbeat = undefined;
     }
 
     await this.saveMigrationJob(job);

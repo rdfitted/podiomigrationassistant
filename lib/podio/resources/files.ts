@@ -137,7 +137,7 @@ export async function uploadFile(
 
     // Create a File object from the buffer for proper file upload
     // Using File instead of Blob ensures proper multipart encoding with filename
-    const file = new File([fileBuffer], fileName, {
+    const file = new File([fileBuffer as unknown as BlobPart], fileName, {
       type: 'application/octet-stream',
     });
 

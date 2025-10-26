@@ -15,6 +15,7 @@ import {
 } from '../shutdown-handler';
 import { ThroughputCalculator } from './throughput-calculator';
 import { MemoryMonitor, logMemoryStats, forceGC } from '../memory-monitor';
+import { updateJobHeartbeat, getHeartbeatInterval } from '../job-lifecycle';
 
 /**
  * Run an item migration job in the background
@@ -40,6 +41,9 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
 
   // Flag to track if migration should pause
   let shouldPause = false;
+
+  // Background heartbeat interval to ensure liveness even during long silent phases
+  let heartbeatTimer: NodeJS.Timeout | undefined;
 
   // Register shutdown callback
   registerShutdownCallback(jobId, async () => {
@@ -109,6 +113,15 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
     // Update status to in_progress
     await migrationStateStore.updateJobStatus(jobId, 'in_progress');
 
+    // Seed initial heartbeat to prevent false "stale" classification before first progress event
+    await updateJobHeartbeat(jobId);
+
+    // Start background heartbeat interval to ensure liveness during long silent phases
+    const hbIntervalMs = getHeartbeatInterval();
+    heartbeatTimer = setInterval(() => {
+      void updateJobHeartbeat(jobId);
+    }, hbIntervalMs);
+
     // Create migrator instance
     const migrator = new ItemMigrator();
 
@@ -146,8 +159,9 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
           shouldPause = true;
         }
 
-        // Throttle progress updates
         const now = Date.now();
+
+        // Throttle progress updates (heartbeat is handled by background interval)
         if (now - lastProgressUpdate >= PROGRESS_UPDATE_INTERVAL) {
           // Track batch completion for throughput calculation
           const itemsInBatch = progress.processed - lastProcessedCount;
@@ -279,6 +293,11 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
 
     throw error;
   } finally {
+    // Clear background heartbeat interval
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+    }
+
     // Stop memory monitoring
     memoryMonitor.stop();
 

@@ -7,6 +7,7 @@ import { migrationStateStore, MigrationProgress } from '../state-store';
 import { ItemMigrationRequestPayload, ItemMigrationStatusResponse, ItemMigrationResult, FieldMapping } from './types';
 import { getAppStructureDetailed } from '../../podio/migration';
 import { logger } from '../logging';
+import { isJobActive } from '../job-lifecycle';
 
 /**
  * Field types that are valid for matching
@@ -112,28 +113,97 @@ export async function createItemMigrationJob(
       return false;
     }
 
-    const isSameApps = metadata.sourceAppId === request.sourceAppId &&
-                       metadata.targetAppId === request.targetAppId;
+    const isSameApps = metadata.sourceAppId === String(request.sourceAppId) &&
+                       metadata.targetAppId === String(request.targetAppId);
     const isActive = activeStatuses.includes(job.status);
     return isSameApps && isActive;
   });
 
   if (activeJobsForSameApps.length > 0) {
     const conflictingJob = activeJobsForSameApps[0];
-    const errorMessage =
-      `Cannot create migration job: An active migration job (${conflictingJob.id}) is already running ` +
-      `for source app ${request.sourceAppId} → target app ${request.targetAppId}. ` +
-      `Status: ${conflictingJob.status}. ` +
-      `Please wait for the existing job to complete or cancel it before starting a new one.`;
 
-    logger.warn('Duplicate job prevention triggered', {
-      requestedSourceAppId: request.sourceAppId,
-      requestedTargetAppId: request.targetAppId,
-      conflictingJobId: conflictingJob.id,
-      conflictingJobStatus: conflictingJob.status,
-    });
+    // Heartbeat check only applies to in_progress jobs
+    // Planning jobs are always considered active and should block duplicate creation
+    const isActuallyActive =
+      conflictingJob.status === 'in_progress'
+        ? await isJobActive(conflictingJob.id)
+        : true; // Planning jobs are always treated as active
 
-    throw new Error(errorMessage);
+    if (conflictingJob.status === 'in_progress' && !isActuallyActive) {
+      // Conflicting job was in_progress but appears stale - attempt cleanup
+      logger.warn('Found stale conflicting job, cleaning up', {
+        jobId: conflictingJob.id,
+        status: conflictingJob.status,
+        lastHeartbeat: conflictingJob.lastHeartbeat,
+      });
+
+      try {
+        // Re-fetch and re-verify before failing to avoid races
+        const fresh = await migrationStateStore.getMigrationJob(conflictingJob.id);
+        if (!fresh || fresh.status !== 'in_progress') {
+          logger.info('Skip cleanup; conflicting job no longer in_progress', {
+            jobId: conflictingJob.id,
+            status: fresh?.status,
+          });
+        } else if (!(await isJobActive(fresh.id))) {
+          await migrationStateStore.updateJobStatus(fresh.id, 'failed', new Date());
+          await migrationStateStore.addMigrationError(
+            fresh.id,
+            'job_lifecycle',
+            'Job marked as failed during duplicate detection. Job was in "in_progress" but had no recent heartbeat, indicating it was orphaned.',
+            'STALE_JOB_CLEANUP'
+          );
+          logger.info('Successfully cleaned up stale job, proceeding with new job creation', {
+            cleanedJobId: fresh.id,
+          });
+        } else {
+          // Became active again; treat as active conflict
+          const errorMessage =
+            `Cannot create migration job: An active migration job (${fresh.id}) is already running ` +
+            `for source app ${request.sourceAppId} → target app ${request.targetAppId}. ` +
+            `Status: ${fresh.status}. ` +
+            `Please wait for the existing job to complete or cancel it before starting a new one.`;
+
+          logger.warn('Duplicate job prevention triggered - job became active again', {
+            requestedSourceAppId: request.sourceAppId,
+            requestedTargetAppId: request.targetAppId,
+            conflictingJobId: fresh.id,
+            conflictingJobStatus: fresh.status,
+            lastHeartbeat: fresh.lastHeartbeat,
+          });
+
+          throw new Error(errorMessage);
+        }
+      } catch (cleanupError) {
+        // If the error is our own thrown error, re-throw it
+        if ((cleanupError as Error).message?.includes('Cannot create migration job')) {
+          throw cleanupError;
+        }
+
+        logger.error('Failed to clean up stale job', {
+          jobId: conflictingJob.id,
+          error: cleanupError,
+        });
+        // Continue anyway - the error will be visible to admins
+      }
+    } else {
+      // For planning jobs (or active in_progress), block duplicate creation
+      const errorMessage =
+        `Cannot create migration job: An active migration job (${conflictingJob.id}) is already running ` +
+        `for source app ${request.sourceAppId} → target app ${request.targetAppId}. ` +
+        `Status: ${conflictingJob.status}. ` +
+        `Please wait for the existing job to complete or cancel it before starting a new one.`;
+
+      logger.warn('Duplicate job prevention triggered - job is actively running', {
+        requestedSourceAppId: request.sourceAppId,
+        requestedTargetAppId: request.targetAppId,
+        conflictingJobId: conflictingJob.id,
+        conflictingJobStatus: conflictingJob.status,
+        lastHeartbeat: conflictingJob.lastHeartbeat,
+      });
+
+      throw new Error(errorMessage);
+    }
   }
 
   logger.info('No duplicate jobs found, proceeding with job creation');
@@ -164,8 +234,8 @@ export async function createItemMigrationJob(
     }
 
     // Validate field types are suitable for matching
-    validateMatchFieldType(sourceField.type, sourceField.label, 'source');
-    validateMatchFieldType(targetField.type, targetField.label, 'target');
+    validateMatchFieldType(sourceField.type, sourceField.label || 'unknown', 'source');
+    validateMatchFieldType(targetField.type, targetField.label || 'unknown', 'target');
 
     logger.info('Match field validation passed', {
       sourceField: { external_id: sourceField.external_id, label: sourceField.label, type: sourceField.type },
