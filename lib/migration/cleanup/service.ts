@@ -279,9 +279,13 @@ export async function detectDuplicateGroups(
     }
   }
 
-  // Log debug info
-  logger.info('Field extraction debug samples', {
-    samples: debugSamples,
+  // Log debug info (redact PII from samples)
+  logger.debug('Field extraction debug samples', {
+    samples: debugSamples.map(s => ({
+      itemId: s.itemId,
+      normalized: s.normalized,
+      preview: typeof s.matchValue === 'string' ? s.matchValue.slice(0, 3) + '…' : typeof s.matchValue,
+    })),
     emptyFieldCount,
   });
 
@@ -297,13 +301,14 @@ export async function detectDuplicateGroups(
     potentialDuplicates: itemsProcessed - itemsSkipped - groups.size,
   };
 
-  // Log statistics
+  // Log statistics (guard against division by zero)
+  const itemsPerSecond = duration > 0 ? Math.round((itemsProcessed / duration) * 1000) : 0;
   logger.info('Duplicate detection complete', {
     itemsProcessed,
     itemsSkipped,
     uniqueValues: groups.size,
     durationMs: duration,
-    itemsPerSecond: Math.round((itemsProcessed / duration) * 1000),
+    itemsPerSecond,
   });
 
   logger.info('Normalization impact', normalizationStats);

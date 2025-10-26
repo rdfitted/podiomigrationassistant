@@ -57,7 +57,7 @@ export async function GET(
 /**
  * POST /api/admin/jobs/[id]
  * Perform actions on a specific job
- * Supported actions: force-cancel, force-complete
+ * Supported actions: force-cancel, force-complete, force-fail
  */
 export async function POST(
   request: NextRequest,

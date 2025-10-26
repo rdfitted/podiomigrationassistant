@@ -130,12 +130,10 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
 
     // Track progress
     let lastProgressUpdate = Date.now();
-    let lastHeartbeatUpdate = Date.now();
     let lastProcessedCount = 0;
     let batchNumber = 0;
     let batchStartTime = Date.now();
     const PROGRESS_UPDATE_INTERVAL = 2000; // Update every 2 seconds
-    const HEARTBEAT_UPDATE_INTERVAL = getHeartbeatInterval(); // Get from lifecycle module
 
     // Execute migration with progress callback
     const result = await migrator.executeMigration({
@@ -163,13 +161,7 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
 
         const now = Date.now();
 
-        // Update heartbeat periodically to indicate job is alive
-        if (now - lastHeartbeatUpdate >= HEARTBEAT_UPDATE_INTERVAL) {
-          await updateJobHeartbeat(jobId);
-          lastHeartbeatUpdate = now;
-        }
-
-        // Throttle progress updates
+        // Throttle progress updates (heartbeat is handled by background interval)
         if (now - lastProgressUpdate >= PROGRESS_UPDATE_INTERVAL) {
           // Track batch completion for throughput calculation
           const itemsInBatch = progress.processed - lastProcessedCount;

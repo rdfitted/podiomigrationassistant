@@ -150,26 +150,63 @@ export async function cleanupStaleJobs(): Promise<number> {
       jobIds: staleJobs.map(j => j.id),
     });
 
+    let cleaned = 0;
     for (const job of staleJobs) {
-      logger.info('Cleaning up stale job', {
-        jobId: job.id,
-        status: job.status,
-        lastHeartbeat: job.lastHeartbeat,
-        startedAt: job.startedAt,
-      });
+      try {
+        // Re-fetch and re-verify to avoid racing with a resumed runner
+        const fresh = await migrationStateStore.getMigrationJob(job.id);
+        if (!fresh || fresh.status !== 'in_progress') {
+          logger.debug('Skip cleanup; job no longer in_progress', {
+            jobId: job.id,
+            status: fresh?.status,
+          });
+          continue;
+        }
 
-      // Mark as failed with explanatory error
-      await migrationStateStore.updateJobStatus(job.id, 'failed', new Date());
-      await migrationStateStore.addMigrationError(
-        job.id,
-        'job_lifecycle',
-        'Job marked as failed due to missing heartbeat. The job appears to have been orphaned (server restart or crash).',
-        'STALE_JOB_CLEANUP'
-      );
+        // Re-evaluate staleness
+        const now = Date.now();
+        const stillInactive = !fresh.lastHeartbeat
+          ? (now - fresh.startedAt.getTime()) >= HEARTBEAT_TIMEOUT_MS
+          : (now - fresh.lastHeartbeat.getTime()) >= HEARTBEAT_TIMEOUT_MS;
+
+        if (!stillInactive) {
+          logger.debug('Skip cleanup; job became active', {
+            jobId: fresh.id,
+            lastHeartbeat: fresh.lastHeartbeat,
+          });
+          continue;
+        }
+
+        logger.info('Cleaning up stale job', {
+          jobId: fresh.id,
+          status: fresh.status,
+          lastHeartbeat: fresh.lastHeartbeat,
+          startedAt: fresh.startedAt,
+        });
+
+        // Mark as failed with explanatory error
+        await migrationStateStore.updateJobStatus(fresh.id, 'failed', new Date());
+        await migrationStateStore.addMigrationError(
+          fresh.id,
+          'job_lifecycle',
+          'Job marked as failed due to missing heartbeat. The job appears to have been orphaned (server restart or crash).',
+          'STALE_JOB_CLEANUP'
+        );
+        cleaned++;
+      } catch (error) {
+        logger.error('Failed to cleanup stale job', {
+          jobId: job.id,
+          error,
+        });
+        // Continue with other jobs - don't let one failure abort the cleanup
+      }
     }
 
-    logger.info('Stale job cleanup complete', { cleanedUp: staleJobs.length });
-    return staleJobs.length;
+    logger.info('Stale job cleanup complete', {
+      cleanedUp: cleaned,
+      detected: staleJobs.length,
+    });
+    return cleaned;
   } catch (error) {
     logger.error('Error cleaning up stale jobs', { error });
     return 0;
