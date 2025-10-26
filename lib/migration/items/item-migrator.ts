@@ -23,11 +23,17 @@ import { ItemBatchProcessor, BatchProcessorConfig } from './batch-processor';
 import { migrationStateStore, MigrationJob } from '../state-store';
 import { logger as migrationLogger, logMigrationEvent, logDuplicateDetection } from '../logging';
 import { convertFieldMappingToExternalIds } from './service';
-import { PrefetchCache, normalizeForMatch } from './prefetch-cache';
+import {
+  PrefetchCache,
+  normalizeForMatch,
+  PrefetchHealthCheckError,
+  PrefetchRunStats,
+  PrefetchTimeoutError,
+} from './prefetch-cache';
 import { getAppStructureCache } from './app-structure-cache';
 import { isFieldNotFoundError } from '../../podio/errors';
 import { getMigrationLogger, removeMigrationLogger, MigrationFileLogger } from '../file-logger';
-import { UpdateStatsTracker, PrefetchStats } from './update-stats-tracker';
+import { UpdateStatsTracker } from './update-stats-tracker';
 import { maskPII } from '../utils/pii-masking';
 
 /**
@@ -78,6 +84,10 @@ export interface MigrationConfig {
   transferFiles?: boolean;
   /** Progress callback */
   onProgress?: (progress: { total: number; processed: number; successful: number; failed: number }) => void | Promise<void>;
+  /** Optional override for target prefetch timeout (ms). Default: 4 hours */
+  prefetchTimeoutMs?: number;
+  /** Optional override for prefetch health check interval (ms). Default: 5 minutes */
+  prefetchHealthCheckIntervalMs?: number;
 }
 
 /**
@@ -856,39 +866,69 @@ export class ItemMigrator {
         });
 
         const prefetchStartTime = Date.now();
-        await prefetchCache.prefetchTargetItems(
-          this.client,
-          config.targetAppId,
-          targetMatchField,
-          fileLogger || undefined  // Pass logger for UPDATE mode logging
-        );
-        const prefetchDuration = Date.now() - prefetchStartTime;
+        try {
+          const prefetchStats: PrefetchRunStats = await prefetchCache.prefetchTargetItems(
+            this.client,
+            config.targetAppId,
+            targetMatchField,
+            fileLogger || undefined,  // Pass logger for UPDATE mode logging
+            config.prefetchTimeoutMs,
+            config.prefetchHealthCheckIntervalMs
+          );
 
-        // ADDED: Enhanced logging with cache statistics
-        const cacheStats = prefetchCache.getCacheStats();
-        migrationLogger.info('Pre-fetch complete', {
-          targetAppId: config.targetAppId,
-          matchField: targetMatchField,
-          cachedItems: prefetchCache.size(),
-          cacheStats: {
-            uniqueKeys: cacheStats.uniqueKeys,
-            totalItems: cacheStats.totalItems,
-            hits: cacheStats.hits,
-            misses: cacheStats.misses,
-          },
-        });
+          // ADDED: Enhanced logging with cache statistics
+          const cacheStats = prefetchCache.getCacheStats();
+          migrationLogger.info('Pre-fetch complete', {
+            targetAppId: config.targetAppId,
+            matchField: targetMatchField,
+            cachedItems: prefetchCache.size(),
+            stats: prefetchStats,
+            cacheStats: {
+              uniqueKeys: cacheStats.uniqueKeys,
+              totalItems: cacheStats.totalItems,
+              hits: cacheStats.hits,
+              misses: cacheStats.misses,
+            },
+          });
 
-        // Record prefetch stats in UPDATE stats tracker
-        if (updateStatsTracker) {
-          const prefetchStats: PrefetchStats = {
-            totalFetched: cacheStats.totalItems,
-            totalCached: prefetchCache.size(),
-            totalSkipped: cacheStats.totalItems - prefetchCache.size(),
-            uniqueKeys: cacheStats.uniqueKeys,
-            durationMs: prefetchDuration,
-            itemsPerSecond: cacheStats.totalItems > 0 ? Math.round(cacheStats.totalItems / (prefetchDuration / 1000)) : 0,
-          };
-          updateStatsTracker.recordPrefetchComplete(prefetchStats);
+          // Record prefetch stats in UPDATE stats tracker
+          if (updateStatsTracker) {
+            updateStatsTracker.recordPrefetchComplete(prefetchStats);
+          }
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          const isTimeout = error instanceof PrefetchTimeoutError;
+          const isHealthCheck = error instanceof PrefetchHealthCheckError;
+
+          migrationLogger.error('Pre-fetch failed - migration cannot continue', {
+            targetAppId: config.targetAppId,
+            matchField: targetMatchField,
+            error: errorMessage,
+            isTimeout,
+            isHealthCheck,
+            elapsedMs: Date.now() - prefetchStartTime,
+          });
+
+          // Enrich error message with context
+          let enrichedMessage = `Prefetch failed for target app ${config.targetAppId}: ${errorMessage}`;
+
+          if (isTimeout) {
+            enrichedMessage += '\n\nThis migration requires prefetching all target items to prevent duplicates, but the operation timed out. ';
+            enrichedMessage += 'Possible solutions:\n';
+            enrichedMessage += '  1. Check network connectivity and API availability\n';
+            enrichedMessage += '  2. The target app may be very large - contact support for assistance\n';
+            enrichedMessage += '  3. Try again during off-peak hours when API performance is better';
+          } else if (isHealthCheck) {
+            enrichedMessage += '\n\nThe prefetch operation stalled (no progress detected). ';
+            enrichedMessage += 'This usually indicates:\n';
+            enrichedMessage += '  1. Network connectivity issues\n';
+            enrichedMessage += '  2. Podio API unavailability or rate limiting\n';
+            enrichedMessage += '  3. App permissions may have changed\n';
+            enrichedMessage += 'Please check your network connection and try again.';
+          }
+
+          const cause = error instanceof Error ? error : new Error(errorMessage);
+          throw new Error(enrichedMessage, { cause });
         }
       }
 

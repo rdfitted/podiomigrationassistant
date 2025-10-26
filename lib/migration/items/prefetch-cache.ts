@@ -17,6 +17,57 @@ import { maskPII } from '../utils/pii-masking';
 import { forceGC } from '../memory-monitor';
 
 /**
+ * Summary statistics returned when a prefetch run completes.
+ */
+export interface PrefetchRunStats {
+  totalFetched: number;
+  totalCached: number;
+  totalSkipped: number;
+  uniqueKeys: number;
+  durationMs: number;
+  itemsPerSecond: number;
+}
+
+/**
+ * Shared context captured for typed prefetch errors.
+ */
+export interface PrefetchErrorContext {
+  appId: number;
+  matchField: string;
+  batchNum: number;
+  itemCount: number;
+  elapsedMs: number;
+}
+
+/**
+ * Error thrown when the overall prefetch timeout elapses.
+ */
+export class PrefetchTimeoutError extends Error {
+  public readonly context: PrefetchErrorContext;
+
+  constructor(message: string, context: PrefetchErrorContext) {
+    super(message);
+    this.name = 'PrefetchTimeoutError';
+    this.context = context;
+    Object.setPrototypeOf(this, PrefetchTimeoutError.prototype);
+  }
+}
+
+/**
+ * Error thrown when the health check watchdog detects that prefetch stalled.
+ */
+export class PrefetchHealthCheckError extends Error {
+  public readonly context: PrefetchErrorContext;
+
+  constructor(message: string, context: PrefetchErrorContext) {
+    super(message);
+    this.name = 'PrefetchHealthCheckError';
+    this.context = context;
+    Object.setPrototypeOf(this, PrefetchHealthCheckError.prototype);
+  }
+}
+
+/**
  * Normalize a value for consistent matching
  * Handles strings, numbers, arrays, and objects
  *
@@ -208,13 +259,18 @@ export class PrefetchCache {
    * @param appId - Target app ID
    * @param matchField - Field external_id to use for matching (e.g., 'email', 'title')
    * @param logger - Optional file logger for detailed logging
+   * @param timeoutMs - Optional timeout in milliseconds (default: 4 hours)
+   * @param healthCheckIntervalMs - Optional interval for health checks (default: 5 minutes)
+   * @returns Summary statistics for the completed prefetch run
    */
   async prefetchTargetItems(
     client: PodioHttpClient,
     appId: number,
     matchField: string,
-    logger?: MigrationFileLogger
-  ): Promise<void> {
+    logger?: MigrationFileLogger,
+    timeoutMs: number = 14400000, // Default: 4 hours (14400000ms)
+    healthCheckIntervalMs: number = 300000 // Default: 5 minutes
+  ): Promise<PrefetchRunStats> {
     const startTime = Date.now();
     this.matchField = matchField;
     this.appId = appId;
@@ -222,12 +278,16 @@ export class PrefetchCache {
     let cachedCount = 0;
     let skippedCount = 0;
     let batchNum = 0;
+    let lastProgressTime = Date.now();
+    let healthCheckTimer: NodeJS.Timeout | null = null;
 
     // Log to both migration logger and file logger
     migrationLogger.info('Starting target item pre-fetch', {
       appId,
       matchField,
       timestamp: new Date().toISOString(),
+      timeoutMs,
+      healthCheckIntervalMs,
     });
 
     if (logger) {
@@ -235,152 +295,256 @@ export class PrefetchCache {
         targetAppId: appId,
         matchField,
         timestamp: new Date().toISOString(),
+        timeoutMs,
+        healthCheckIntervalMs,
       });
     }
 
-    try {
-      // Stream all items from target app
-      for await (const batch of streamItems(client, appId, {
-        batchSize: 500,
-      })) {
-        batchNum++;
-        let batchCached = 0;
-        let batchSkipped = 0;
+    const clearHealthCheckTimer = (): void => {
+      if (healthCheckTimer) {
+        clearTimeout(healthCheckTimer);
+        healthCheckTimer = null;
+      }
+    };
 
-        for (const item of batch) {
-          itemCount++;
+    const streamIterator = streamItems(client, appId, {
+      batchSize: 500,
+    });
 
-          // Find the match field in the item
-          const field = item.fields.find(f => f.external_id === matchField);
-
-          if (field && field.values && field.values.length > 0) {
-            // Extract and normalize the match value
-            const matchValue = extractFieldValue(field);
-            const normalizedKey = normalizeValue(matchValue);
-
-            // Skip empty values when building cache
-            if (normalizedKey && normalizedKey !== '') {
-              // Store SLIM cache entry - only item_id and match value
-              // This reduces memory usage by ~90% compared to storing full PodioItem
-              this.cache.set(this.makeKey(normalizedKey), {
-                itemId: item.item_id,
-                matchValue,
-                createdAt: Date.now(),
+    const prefetchPromise = (async (): Promise<PrefetchRunStats> => {
+      try {
+        while (true) {
+          const nextPromise = streamIterator.next();
+          const stallPromise = new Promise<IteratorResult<PodioItem[]>>((_, reject) => {
+            healthCheckTimer = setTimeout(() => {
+              const timeSinceLastProgress = Date.now() - lastProgressTime;
+              const totalElapsed = Date.now() - startTime;
+              const error = new PrefetchHealthCheckError(
+                `Prefetch health check failed: No progress for ${Math.round(timeSinceLastProgress / 1000)}s. ` +
+                `Last batch: ${batchNum}, items processed: ${itemCount}. This may indicate a network issue or API stall.`,
+                {
+                  appId,
+                  matchField,
+                  batchNum,
+                  itemCount,
+                  elapsedMs: totalElapsed,
+                }
+              );
+              migrationLogger.error('Prefetch stalled - no progress detected', {
                 appId,
+                matchField,
+                batchNum,
+                itemCount,
+                timeSinceLastProgressMs: timeSinceLastProgress,
+                totalElapsedMs: totalElapsed,
               });
-              cachedCount++;
-              batchCached++;
+              reject(error);
+            }, healthCheckIntervalMs);
 
-              // Debug-level logging for each cached item (fire-and-forget for performance)
-              if (logger) {
-                void logger.logPrefetch('DEBUG', 'prefetch_item_cached', {
+            if (healthCheckTimer && typeof healthCheckTimer.unref === 'function') {
+              healthCheckTimer.unref();
+            }
+          });
+
+          let nextResult: IteratorResult<PodioItem[]>;
+          try {
+            nextResult = await Promise.race([nextPromise, stallPromise]);
+          } finally {
+            clearHealthCheckTimer();
+          }
+
+          if (nextResult.done) {
+            break;
+          }
+
+          const batch = nextResult.value || [];
+          if (batch.length === 0) {
+            continue;
+          }
+
+          lastProgressTime = Date.now();
+          batchNum++;
+          let batchCached = 0;
+          let batchSkipped = 0;
+
+          for (const item of batch) {
+            itemCount++;
+
+            // Find the match field in the item
+            const field = item.fields.find(f => f.external_id === matchField);
+
+            if (field && field.values && field.values.length > 0) {
+              // Extract and normalize the match value
+              const matchValue = extractFieldValue(field);
+              const normalizedKey = normalizeValue(matchValue);
+
+              // Skip empty values when building cache
+              if (normalizedKey && normalizedKey !== '') {
+                // Store SLIM cache entry - only item_id and match value
+                // This reduces memory usage by ~90% compared to storing full PodioItem
+                this.cache.set(this.makeKey(normalizedKey), {
                   itemId: item.item_id,
-                  matchValue: maskPII(matchValue),
-                  normalizedKey: maskPII(normalizedKey),
+                  matchValue,
+                  createdAt: Date.now(),
+                  appId,
                 });
+                cachedCount++;
+                batchCached++;
+
+                // Debug-level logging for each cached item (fire-and-forget for performance)
+                if (logger) {
+                  void logger.logPrefetch('DEBUG', 'prefetch_item_cached', {
+                    itemId: item.item_id,
+                    matchValue: maskPII(matchValue),
+                    normalizedKey: maskPII(normalizedKey),
+                  });
+                }
+              } else {
+                skippedCount++;
+                batchSkipped++;
+
+                // Debug-level logging for skipped items (fire-and-forget for performance)
+                if (logger) {
+                  void logger.logPrefetch('DEBUG', 'prefetch_item_skipped', {
+                    itemId: item.item_id,
+                    reason: 'no_match_field_value',
+                    matchValue: maskPII(matchValue),
+                  });
+                }
               }
             } else {
               skippedCount++;
               batchSkipped++;
 
-              // Debug-level logging for skipped items (fire-and-forget for performance)
+              // Debug-level logging for items without match field (fire-and-forget for performance)
               if (logger) {
                 void logger.logPrefetch('DEBUG', 'prefetch_item_skipped', {
                   itemId: item.item_id,
-                  reason: 'no_match_field_value',
-                  matchValue: maskPII(matchValue),
+                  reason: 'match_field_not_found',
+                  matchField,
+                  availableFields: item.fields.map(f => f.external_id),
                 });
               }
             }
-          } else {
-            skippedCount++;
-            batchSkipped++;
-
-            // Debug-level logging for items without match field (fire-and-forget for performance)
-            if (logger) {
-              void logger.logPrefetch('DEBUG', 'prefetch_item_skipped', {
-                itemId: item.item_id,
-                reason: 'match_field_not_found',
-                matchField,
-                availableFields: item.fields.map(f => f.external_id),
-              });
-            }
           }
-        }
 
-        // Log batch progress
-        migrationLogger.info('Pre-fetch batch processed', {
-          appId,
-          matchField,
-          batchNum,
-          batchSize: batch.length,
-          batchCached,
-          batchSkipped,
-          totalCached: cachedCount,
-          totalSkipped: skippedCount,
-          totalItems: itemCount,
-        });
-
-        if (logger) {
-          await logger.logPrefetch('INFO', 'prefetch_batch_processed', {
+          // Log batch progress
+          migrationLogger.info('Pre-fetch batch processed', {
+            appId,
+            matchField,
             batchNum,
             batchSize: batch.length,
-            itemsCached: batchCached,
-            itemsSkipped: batchSkipped,
+            batchCached,
+            batchSkipped,
             totalCached: cachedCount,
             totalSkipped: skippedCount,
             totalItems: itemCount,
           });
+
+          if (logger) {
+            await logger.logPrefetch('INFO', 'prefetch_batch_processed', {
+              batchNum,
+              batchSize: batch.length,
+              itemsCached: batchCached,
+              itemsSkipped: batchSkipped,
+              totalCached: cachedCount,
+              totalSkipped: skippedCount,
+              totalItems: itemCount,
+            });
+          }
         }
-      }
 
-      const duration = Date.now() - startTime;
+        const duration = Date.now() - startTime;
 
-      // Calculate estimated memory usage
-      const estimatedMemoryBytes = this.estimateMemoryUsage();
-      const estimatedMemoryMB = Math.round((estimatedMemoryBytes / (1024 * 1024)) * 100) / 100;
-
-      migrationLogger.info('Pre-fetch complete', {
-        appId,
-        matchField,
-        totalFetched: itemCount,
-        totalCached: cachedCount,
-        totalSkipped: skippedCount,
-        uniqueKeys: this.cache.size,
-        durationMs: duration,
-        itemsPerSecond: itemCount > 0 ? Math.round(itemCount / (duration / 1000)) : 0,
-        estimatedMemoryMB,
-      });
-
-      if (logger) {
-        await logger.logPrefetch('INFO', 'prefetch_complete', {
-          targetAppId: appId,
-          matchField,
+        // Calculate estimated memory usage
+        const estimatedMemoryBytes = this.estimateMemoryUsage();
+        const estimatedMemoryMB = Math.round((estimatedMemoryBytes / (1024 * 1024)) * 100) / 100;
+        const stats: PrefetchRunStats = {
           totalFetched: itemCount,
           totalCached: cachedCount,
           totalSkipped: skippedCount,
           uniqueKeys: this.cache.size,
           durationMs: duration,
           itemsPerSecond: itemCount > 0 ? Math.round(itemCount / (duration / 1000)) : 0,
+        };
+
+        migrationLogger.info('Pre-fetch complete', {
+          appId,
+          matchField,
+          ...stats,
           estimatedMemoryMB,
         });
-      }
 
-      // Suggest garbage collection after large prefetch
-      if (estimatedMemoryMB > 100) {
-        migrationLogger.info('Running garbage collection after large prefetch', {
-          estimatedMemoryMB: Math.round(estimatedMemoryMB),
+        if (logger) {
+          await logger.logPrefetch('INFO', 'prefetch_complete', {
+            targetAppId: appId,
+            matchField,
+            ...stats,
+            estimatedMemoryMB,
+          });
+        }
+
+        // Suggest garbage collection after large prefetch
+        if (estimatedMemoryMB > 100) {
+          migrationLogger.info('Running garbage collection after large prefetch', {
+            estimatedMemoryMB: Math.round(estimatedMemoryMB),
+          });
+          forceGC();
+        }
+
+        return stats;
+      } catch (error) {
+        migrationLogger.error('Pre-fetch failed', {
+          appId,
+          matchField,
+          itemCount,
+          error: error instanceof Error ? error.message : String(error),
         });
-        forceGC();
+        throw error;
+      } finally {
+        clearHealthCheckTimer();
       }
-    } catch (error) {
-      migrationLogger.error('Pre-fetch failed', {
-        appId,
-        matchField,
-        itemCount,
-        error: error instanceof Error ? error.message : String(error),
-      });
+    })();
 
+    // Timeout promise that rejects after specified timeout
+    let timeoutHandle: NodeJS.Timeout | null = null;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(() => {
+        const elapsedMs = Date.now() - startTime;
+        const error = new PrefetchTimeoutError(
+          `Prefetch timeout: Operation exceeded ${Math.round(timeoutMs / 1000)}s limit. ` +
+          `Processed ${itemCount} items in ${batchNum} batches before timeout. ` +
+          `Consider increasing timeout for very large apps or check for API issues.`,
+          {
+            appId,
+            matchField,
+            batchNum,
+            itemCount,
+            elapsedMs,
+          }
+        );
+        migrationLogger.error('Prefetch timeout exceeded', {
+          appId,
+          matchField,
+          timeoutMs,
+          itemCount,
+          batchNum,
+          cachedCount,
+        });
+        reject(error);
+      }, timeoutMs);
+
+      if (timeoutHandle && typeof timeoutHandle.unref === 'function') {
+        timeoutHandle.unref();
+      }
+    });
+
+    // Race between prefetch and timeout
+    try {
+      const stats = await Promise.race([prefetchPromise, timeoutPromise]);
+      return stats;
+    } catch (error) {
+      // Log final error state
       if (logger) {
         await logger.logPrefetch('ERROR', 'prefetch_failed', {
           targetAppId: appId,
@@ -389,10 +553,16 @@ export class PrefetchCache {
           totalCached: cachedCount,
           totalSkipped: skippedCount,
           error: error instanceof Error ? error.message : String(error),
+          isTimeout: error instanceof PrefetchTimeoutError,
+          isHealthCheckFailure: error instanceof PrefetchHealthCheckError,
         });
       }
-
       throw error;
+    } finally {
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+        timeoutHandle = null;
+      }
     }
   }
 
