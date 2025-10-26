@@ -14,10 +14,10 @@ import { logger } from '@/lib/migration/logging';
  */
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const jobId = params.id;
+    const { id: jobId } = await params;
     logger.info('Admin API: Getting job details', { jobId });
 
     const job = await migrationStateStore.getMigrationJob(jobId);
@@ -61,10 +61,10 @@ export async function GET(
  */
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const jobId = params.id;
+    const { id: jobId } = await params;
     const body = await request.json();
     const action = body.action;
 

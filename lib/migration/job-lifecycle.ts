@@ -3,7 +3,7 @@
  * Provides heartbeat tracking and stale job cleanup
  */
 
-import { migrationStateStore, MigrationJob } from './state-store';
+import { migrationStateStore, MigrationJob, MigrationJobStatus } from './state-store';
 import { logger } from './logging';
 
 /**
@@ -11,6 +11,31 @@ import { logger } from './logging';
  */
 const HEARTBEAT_TIMEOUT_MS = 60000; // 60 seconds - job is stale if no heartbeat for this long
 const HEARTBEAT_UPDATE_INTERVAL_MS = 10000; // 10 seconds - how often to update heartbeat
+
+/**
+ * Check if a job is currently active based on its in-memory state
+ * A job is considered active if:
+ * 1. It has status 'in_progress'
+ * 2. It has a recent heartbeat (within HEARTBEAT_TIMEOUT_MS)
+ */
+function isJobActiveFrom(job: MigrationJob, now = Date.now()): boolean {
+  // Only in_progress jobs can be active
+  if (job.status !== 'in_progress') {
+    return false;
+  }
+
+  // Check heartbeat
+  if (!job.lastHeartbeat) {
+    // No heartbeat yet - could be a job that just started
+    // Check if it started recently (within last 60 seconds)
+    const timeSinceStart = now - job.startedAt.getTime();
+    return timeSinceStart < HEARTBEAT_TIMEOUT_MS;
+  }
+
+  // Check if heartbeat is recent
+  const timeSinceHeartbeat = now - job.lastHeartbeat.getTime();
+  return timeSinceHeartbeat < HEARTBEAT_TIMEOUT_MS;
+}
 
 /**
  * Check if a job is currently active based on its heartbeat
@@ -27,40 +52,23 @@ export async function isJobActive(jobId: string): Promise<boolean> {
       return false;
     }
 
-    // Only in_progress jobs can be active
-    if (job.status !== 'in_progress') {
-      return false;
-    }
+    const isActive = isJobActiveFrom(job);
 
-    // Check heartbeat
-    if (!job.lastHeartbeat) {
-      // No heartbeat yet - could be a job that just started
-      // Check if it started recently (within last 60 seconds)
-      const timeSinceStart = Date.now() - job.startedAt.getTime();
-      const isRecentlyStarted = timeSinceStart < HEARTBEAT_TIMEOUT_MS;
-
-      if (!isRecentlyStarted) {
+    if (!isActive && job.status === 'in_progress') {
+      if (!job.lastHeartbeat) {
         logger.debug('Job has no heartbeat and is not recently started', {
           jobId,
           startedAt: job.startedAt,
-          timeSinceStart,
+          timeSinceStart: Date.now() - job.startedAt.getTime(),
+        });
+      } else {
+        logger.debug('Job heartbeat is stale', {
+          jobId,
+          lastHeartbeat: job.lastHeartbeat,
+          timeSinceHeartbeat: Date.now() - job.lastHeartbeat.getTime(),
+          timeoutMs: HEARTBEAT_TIMEOUT_MS,
         });
       }
-
-      return isRecentlyStarted;
-    }
-
-    // Check if heartbeat is recent
-    const timeSinceHeartbeat = Date.now() - job.lastHeartbeat.getTime();
-    const isActive = timeSinceHeartbeat < HEARTBEAT_TIMEOUT_MS;
-
-    if (!isActive) {
-      logger.debug('Job heartbeat is stale', {
-        jobId,
-        lastHeartbeat: job.lastHeartbeat,
-        timeSinceHeartbeat,
-        timeoutMs: HEARTBEAT_TIMEOUT_MS,
-      });
     }
 
     return isActive;
@@ -109,13 +117,11 @@ export async function findStaleJobs(): Promise<MigrationJob[]> {
   try {
     const allJobs = await migrationStateStore.listMigrationJobs();
     const staleJobs: MigrationJob[] = [];
+    const now = Date.now();
 
     for (const job of allJobs) {
-      if (job.status === 'in_progress') {
-        const isActive = await isJobActive(job.id);
-        if (!isActive) {
-          staleJobs.push(job);
-        }
+      if (job.status === 'in_progress' && !isJobActiveFrom(job, now)) {
+        staleJobs.push(job);
       }
     }
 
@@ -182,7 +188,7 @@ export function getHeartbeatInterval(): number {
  */
 export async function getJobHealth(jobId: string): Promise<{
   jobId: string;
-  status: string;
+  status: MigrationJobStatus | 'not_found';
   isActive: boolean;
   lastHeartbeat?: Date;
   timeSinceHeartbeat?: number;

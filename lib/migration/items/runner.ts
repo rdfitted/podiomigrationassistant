@@ -42,6 +42,9 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
   // Flag to track if migration should pause
   let shouldPause = false;
 
+  // Background heartbeat interval to ensure liveness even during long silent phases
+  let heartbeatTimer: NodeJS.Timeout | undefined;
+
   // Register shutdown callback
   registerShutdownCallback(jobId, async () => {
     logger.info('Shutdown callback triggered', { jobId });
@@ -109,6 +112,15 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
 
     // Update status to in_progress
     await migrationStateStore.updateJobStatus(jobId, 'in_progress');
+
+    // Seed initial heartbeat to prevent false "stale" classification before first progress event
+    await updateJobHeartbeat(jobId);
+
+    // Start background heartbeat interval to ensure liveness during long silent phases
+    const hbIntervalMs = getHeartbeatInterval();
+    heartbeatTimer = setInterval(() => {
+      void updateJobHeartbeat(jobId);
+    }, hbIntervalMs);
 
     // Create migrator instance
     const migrator = new ItemMigrator();
@@ -289,6 +301,11 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
 
     throw error;
   } finally {
+    // Clear background heartbeat interval
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+    }
+
     // Stop memory monitoring
     memoryMonitor.stop();
 

@@ -97,7 +97,7 @@ export async function createCleanupJob(
   }
 
   // Validate field type is suitable for matching
-  validateMatchFieldType(matchField.type, matchField.label);
+  validateMatchFieldType(matchField.type, matchField.label || 'unknown');
 
   logger.info('Match field validation passed', {
     matchField: { external_id: matchField.external_id, label: matchField.label, type: matchField.type },
@@ -233,7 +233,7 @@ export async function detectDuplicateGroups(
       // Extract the actual value from the field
       let raw = Array.isArray(fieldValue.values) && fieldValue.values.length > 0
         ? fieldValue.values[0]?.value
-        : fieldValue.value;
+        : (fieldValue as any).value;
 
       // Unwrap nested objects (e.g., {text: ...}, {value: ...})
       const matchValue =
@@ -268,9 +268,9 @@ export async function detectDuplicateGroups(
 
       const duplicateItem: DuplicateItem = {
         itemId: item.item_id,
-        title: item.title || `Item ${item.item_id}`,
+        title: (item as any).title || `Item ${item.item_id}`,
         createdOn: item.created_on,
-        lastEditOn: item.last_event_on || item.created_on,
+        lastEditOn: (item as any).last_event_on || item.created_on,
         matchValue: String(matchValue),
         fieldValues: {}, // Can add preview fields here if needed
       };

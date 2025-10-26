@@ -726,7 +726,7 @@ export class PrefetchCache {
     return {
       item_id: itemId,
       fields: [],
-    } as PodioItem;
+    } as unknown as PodioItem;
   }
 
   /**
