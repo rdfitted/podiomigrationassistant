@@ -15,6 +15,7 @@ import {
 } from '../shutdown-handler';
 import { ThroughputCalculator } from './throughput-calculator';
 import { MemoryMonitor, logMemoryStats, forceGC } from '../memory-monitor';
+import { updateJobHeartbeat, getHeartbeatInterval } from '../job-lifecycle';
 
 /**
  * Run an item migration job in the background
@@ -117,10 +118,12 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
 
     // Track progress
     let lastProgressUpdate = Date.now();
+    let lastHeartbeatUpdate = Date.now();
     let lastProcessedCount = 0;
     let batchNumber = 0;
     let batchStartTime = Date.now();
     const PROGRESS_UPDATE_INTERVAL = 2000; // Update every 2 seconds
+    const HEARTBEAT_UPDATE_INTERVAL = getHeartbeatInterval(); // Get from lifecycle module
 
     // Execute migration with progress callback
     const result = await migrator.executeMigration({
@@ -146,8 +149,15 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
           shouldPause = true;
         }
 
-        // Throttle progress updates
         const now = Date.now();
+
+        // Update heartbeat periodically to indicate job is alive
+        if (now - lastHeartbeatUpdate >= HEARTBEAT_UPDATE_INTERVAL) {
+          await updateJobHeartbeat(jobId);
+          lastHeartbeatUpdate = now;
+        }
+
+        // Throttle progress updates
         if (now - lastProgressUpdate >= PROGRESS_UPDATE_INTERVAL) {
           // Track batch completion for throughput calculation
           const itemsInBatch = progress.processed - lastProcessedCount;

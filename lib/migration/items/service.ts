@@ -7,6 +7,7 @@ import { migrationStateStore, MigrationProgress } from '../state-store';
 import { ItemMigrationRequestPayload, ItemMigrationStatusResponse, ItemMigrationResult, FieldMapping } from './types';
 import { getAppStructureDetailed } from '../../podio/migration';
 import { logger } from '../logging';
+import { isJobActive } from '../job-lifecycle';
 
 /**
  * Field types that are valid for matching
@@ -120,20 +121,57 @@ export async function createItemMigrationJob(
 
   if (activeJobsForSameApps.length > 0) {
     const conflictingJob = activeJobsForSameApps[0];
-    const errorMessage =
-      `Cannot create migration job: An active migration job (${conflictingJob.id}) is already running ` +
-      `for source app ${request.sourceAppId} → target app ${request.targetAppId}. ` +
-      `Status: ${conflictingJob.status}. ` +
-      `Please wait for the existing job to complete or cancel it before starting a new one.`;
 
-    logger.warn('Duplicate job prevention triggered', {
-      requestedSourceAppId: request.sourceAppId,
-      requestedTargetAppId: request.targetAppId,
-      conflictingJobId: conflictingJob.id,
-      conflictingJobStatus: conflictingJob.status,
-    });
+    // Check if the conflicting job is actually running (heartbeat-based check)
+    const isActuallyActive = await isJobActive(conflictingJob.id);
 
-    throw new Error(errorMessage);
+    if (!isActuallyActive) {
+      // Job is marked as active but isn't actually running - clean it up
+      logger.warn('Found stale conflicting job, cleaning up', {
+        jobId: conflictingJob.id,
+        status: conflictingJob.status,
+        lastHeartbeat: conflictingJob.lastHeartbeat,
+      });
+
+      try {
+        // Mark the stale job as failed
+        await migrationStateStore.updateJobStatus(conflictingJob.id, 'failed', new Date());
+        await migrationStateStore.addMigrationError(
+          conflictingJob.id,
+          'job_lifecycle',
+          'Job marked as failed during duplicate detection. Job was in "' + conflictingJob.status +
+            '" status but had no recent heartbeat, indicating it was orphaned.',
+          'STALE_JOB_CLEANUP'
+        );
+
+        logger.info('Successfully cleaned up stale job, proceeding with new job creation', {
+          cleanedJobId: conflictingJob.id,
+        });
+      } catch (cleanupError) {
+        logger.error('Failed to clean up stale job', {
+          jobId: conflictingJob.id,
+          error: cleanupError,
+        });
+        // Continue anyway - the error will be visible to admins
+      }
+    } else {
+      // Job is actually running - block duplicate
+      const errorMessage =
+        `Cannot create migration job: An active migration job (${conflictingJob.id}) is already running ` +
+        `for source app ${request.sourceAppId} → target app ${request.targetAppId}. ` +
+        `Status: ${conflictingJob.status}. ` +
+        `Please wait for the existing job to complete or cancel it before starting a new one.`;
+
+      logger.warn('Duplicate job prevention triggered - job is actively running', {
+        requestedSourceAppId: request.sourceAppId,
+        requestedTargetAppId: request.targetAppId,
+        conflictingJobId: conflictingJob.id,
+        conflictingJobStatus: conflictingJob.status,
+        lastHeartbeat: conflictingJob.lastHeartbeat,
+      });
+
+      throw new Error(errorMessage);
+    }
   }
 
   logger.info('No duplicate jobs found, proceeding with job creation');

@@ -133,6 +133,7 @@ export interface MigrationJob {
   status: MigrationJobStatus;
   startedAt: Date;
   completedAt?: Date;
+  lastHeartbeat?: Date;
   steps: MigrationStep[];
   errors: MigrationError[];
   progress?: MigrationProgress;
@@ -321,6 +322,9 @@ export class MigrationStateStore {
       job.startedAt = new Date(job.startedAt);
       if (job.completedAt) {
         job.completedAt = new Date(job.completedAt);
+      }
+      if (job.lastHeartbeat) {
+        job.lastHeartbeat = new Date(job.lastHeartbeat);
       }
       if (job.progress?.lastUpdate) {
         job.progress.lastUpdate = new Date(job.progress.lastUpdate);
