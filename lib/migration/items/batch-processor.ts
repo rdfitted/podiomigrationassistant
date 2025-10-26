@@ -780,13 +780,15 @@ export class ItemBatchProcessor extends EventEmitter {
     const { appId, logUpdateEvent } = options;
     const hasRateLimitErrors = batchResult.failed.some(failure => this.isRateLimitFailure(failure.error));
 
-    if (!hasRateLimitErrors || batchNum >= batches - 1) {
+    // Only skip if no rate limit errors were found
+    if (!hasRateLimitErrors) {
       return;
     }
 
+    // Always wait for rate limit reset if errors were detected
     const timeUntilReset = tracker.getTimeUntilReset();
     if (timeUntilReset <= 0) {
-      return;
+      return; // Rate limit already reset
     }
 
     const resumeAt = new Date(Date.now() + timeUntilReset);
