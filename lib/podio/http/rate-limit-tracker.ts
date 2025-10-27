@@ -128,10 +128,25 @@ export class RateLimitTracker {
    */
   shouldPause(threshold: number = 10): boolean {
     if (!this.state) {
+      podioLog('debug', 'shouldPause() called but no rate limit state available - returning false', {
+        threshold,
+      });
       return false; // No state yet, don't pause
     }
 
-    return this.state.remaining < threshold;
+    const shouldPause = this.state.remaining < threshold;
+
+    if (shouldPause) {
+      podioLog('warn', 'Rate limit threshold reached - should pause', {
+        remaining: this.state.remaining,
+        threshold,
+        limit: this.state.limit,
+        percentRemaining: Math.round((this.state.remaining / this.state.limit) * 100),
+        reset: this.state.reset,
+      });
+    }
+
+    return shouldPause;
   }
 
   /**
@@ -141,6 +156,7 @@ export class RateLimitTracker {
    */
   getTimeUntilReset(): number {
     if (!this.state) {
+      podioLog('debug', 'getTimeUntilReset() called but no state available - returning 0');
       return 0;
     }
 
@@ -155,6 +171,18 @@ export class RateLimitTracker {
 
       const now = Date.now();
       const timeUntilReset = resetTime - now;
+
+      // Log when reset time is in the past
+      if (timeUntilReset <= 0) {
+        podioLog('debug', 'Reset time is in the past', {
+          reset: this.state.reset,
+          resetTime: new Date(resetTime).toISOString(),
+          now: new Date(now).toISOString(),
+          timeSinceReset: Math.abs(timeUntilReset),
+          remaining: this.state.remaining,
+          limit: this.state.limit,
+        });
+      }
 
       return Math.max(0, timeUntilReset);
     } catch (error) {
@@ -176,11 +204,76 @@ export class RateLimitTracker {
   async waitForReset(maxWait: number = 3600000): Promise<void> {
     const timeUntilReset = this.getTimeUntilReset();
 
+    // DEFENSIVE: Handle case where getTimeUntilReset() returns 0
+    // This can happen for multiple reasons, not all of which are safe to ignore
     if (timeUntilReset === 0) {
-      podioLog('info', 'Rate limit already reset, continuing');
+      // Case 1: No rate limit state available
+      // We don't know if the rate limit has actually reset, so we must wait
+      if (!this.state) {
+        podioLog('error', 'waitForReset() called but no rate limit state available - waiting default period to be safe', {
+          defaultWaitMs: maxWait,
+          defaultWaitMinutes: Math.round(maxWait / 60000),
+        });
+
+        // Wait for default period (up to 1 hour) to be safe
+        const resumeAt = new Date(Date.now() + maxWait);
+        podioLog('warn', 'Waiting default period due to missing rate limit state', {
+          waitTimeMs: maxWait,
+          waitTimeMinutes: Math.round(maxWait / 60000),
+          resumeAt: resumeAt.toISOString(),
+        });
+
+        return new Promise((resolve) => {
+          setTimeout(() => {
+            podioLog('warn', 'Default rate limit wait complete (no state) - resuming with caution');
+            resolve();
+          }, maxWait);
+        });
+      }
+
+      // Case 2: State exists but reset time is in the past
+      // If quota is still low, this indicates a data consistency issue
+      if (this.state.remaining < 10) {
+        podioLog('error', 'Rate limit quota is low but reset time is in the past - data consistency issue', {
+          remaining: this.state.remaining,
+          limit: this.state.limit,
+          reset: this.state.reset,
+          lastUpdated: this.state.lastUpdated.toISOString(),
+          now: new Date().toISOString(),
+        });
+
+        // Wait for a conservative period to avoid hammering the API
+        const conservativeWait = Math.min(3600000, maxWait); // 1 hour max
+        const resumeAt = new Date(Date.now() + conservativeWait);
+
+        podioLog('warn', 'Waiting conservative period due to inconsistent rate limit state', {
+          waitTimeMs: conservativeWait,
+          waitTimeMinutes: Math.round(conservativeWait / 60000),
+          resumeAt: resumeAt.toISOString(),
+          currentRemaining: this.state.remaining,
+          currentLimit: this.state.limit,
+        });
+
+        return new Promise((resolve) => {
+          setTimeout(() => {
+            podioLog('info', 'Conservative rate limit wait complete - resuming');
+            resolve();
+          }, conservativeWait);
+        });
+      }
+
+      // Case 3: Reset time is in the past and quota has been restored (or was never low)
+      // This is the only legitimate case to continue immediately
+      podioLog('info', 'Rate limit already reset, continuing', {
+        remaining: this.state.remaining,
+        limit: this.state.limit,
+        reset: this.state.reset,
+        percentRemaining: Math.round((this.state.remaining / this.state.limit) * 100),
+      });
       return;
     }
 
+    // Normal case: We have a valid future reset time, wait for it
     const waitTime = Math.min(timeUntilReset, maxWait);
     const resumeAt = new Date(Date.now() + waitTime);
 
@@ -190,6 +283,8 @@ export class RateLimitTracker {
       waitTimeMinutes: Math.round(waitTime / 60000),
       resumeAt: resumeAt.toISOString(),
       currentRemaining: this.state?.remaining ?? 0,
+      currentLimit: this.state?.limit ?? 0,
+      resetTime: this.state?.reset,
     });
 
     return new Promise((resolve) => {
