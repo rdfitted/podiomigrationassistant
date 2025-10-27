@@ -518,7 +518,7 @@ export class MigrationStateStore {
       mergedProgress.failedItemsByCategory = {
         ...(job.progress?.failedItemsByCategory ?? {}),
         ...(progress.failedItemsByCategory ?? {}),
-      };
+      } as Record<ErrorCategory, number>;
     }
 
     if (!progress.failedItems && job.progress?.failedItems && !mergedProgress.failedItems) {

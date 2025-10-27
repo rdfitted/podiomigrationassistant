@@ -47,7 +47,7 @@ async function analyzeFailures() {
 
   // Step 2: Sample a few failed items to analyze
   console.log('📥 Step 2: Sampling failed items to identify error patterns...');
-  const failedSamples: Array<{ itemId: number; hasFiles: boolean; fieldCount: number }> = [];
+  const failedSamples: Array<{ itemId: number; fieldCount: number }> = [];
   let sourceItemCount = 0;
   let totalFailedCount = 0;
   const SAMPLE_SIZE = 10;
@@ -61,11 +61,9 @@ async function analyzeFailures() {
 
         // Sample first 10 failures for analysis
         if (failedSamples.length < SAMPLE_SIZE) {
-          const hasFiles = (item.files && item.files.length > 0) || false;
           const fieldCount = item.fields ? item.fields.length : 0;
           failedSamples.push({
             itemId: item.item_id,
-            hasFiles,
             fieldCount
           });
         }
@@ -89,16 +87,14 @@ async function analyzeFailures() {
   console.log('');
 
   console.log('🔬 Failed Item Characteristics:');
-  const withFiles = failedSamples.filter(s => s.hasFiles).length;
   const avgFieldCount = failedSamples.reduce((sum, s) => sum + s.fieldCount, 0) / failedSamples.length;
 
-  console.log(`  Items with files: ${withFiles}/${failedSamples.length} (${Math.round(withFiles/failedSamples.length*100)}%)`);
   console.log(`  Average field count: ${avgFieldCount.toFixed(1)}`);
   console.log('');
 
   console.log('Sample Failed Item IDs:');
   failedSamples.forEach(s => {
-    console.log(`  - ${s.itemId} (files: ${s.hasFiles}, fields: ${s.fieldCount})`);
+    console.log(`  - ${s.itemId} (fields: ${s.fieldCount})`);
   });
   console.log('');
 
@@ -122,10 +118,6 @@ async function analyzeFailures() {
 
   console.log('');
   console.log('💡 Likely Failure Causes:');
-
-  if (withFiles / failedSamples.length > 0.5) {
-    console.log('  ⚠️  File transfer issues (>50% of failures have files)');
-  }
 
   if (job?.metadata?.transferFiles === true) {
     console.log('  ⚠️  File transfers enabled - check for file format/size issues');
