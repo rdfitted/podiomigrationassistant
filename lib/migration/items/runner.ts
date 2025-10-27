@@ -167,17 +167,6 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
       dryRun: metadata.dryRun, // Pass dry-run mode
       transferFiles: metadata.transferFiles, // Pass file transfer mode
       retryItemIds: retryItemIds.length > 0 ? retryItemIds : undefined,
-      onRateLimitPause: async (delayMs, resumeAt, reason) => {
-        // Record rate limit pause in throughput calculator
-        throughputCalculator.recordRateLimitPause(delayMs);
-        logger.info('Rate limit pause recorded', {
-          jobId,
-          delayMs,
-          delaySeconds: Math.round(delayMs / 1000),
-          resumeAt: resumeAt.toISOString(),
-          reason,
-        });
-      },
       onProgress: async (progress) => {
         // Check for pause request
         if (isPauseRequested(jobId)) {
@@ -193,13 +182,12 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
 
           if (itemsInBatch > 0) {
             // Complete the current batch
-            // Note: Rate limit tracking is handled via onRateLimitPause callback
             throughputCalculator.completeBatch(
               batchNumber,
               batchStartTime,
               itemsInBatch,
-              false, // Not used - rate limits tracked via onRateLimitPause callback
-              0      // Not used - rate limits tracked via onRateLimitPause callback
+              false, // TODO: Track rate limiting from batch processor
+              0      // TODO: Track rate limit delay from batch processor
             );
 
             // Calculate current throughput metrics
