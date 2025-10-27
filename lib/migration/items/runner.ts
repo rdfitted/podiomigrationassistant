@@ -74,11 +74,9 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
     });
 
     // Extract failed item IDs for retry (if this is a retry)
-    // Load from log file instead of in-memory array
-    const failedItems = await failureLogger.getFailedItems(jobId);
-    const retryItemIds = failedItems
-      .map(item => item.sourceItemId)
-      .filter(id => id > 0); // Filter out invalid IDs (e.g., 0 from update failures)
+    // Load lightweight list from the failures log
+    const retryItemIds = (await failureLogger.getFailedItemIds(jobId))
+      .filter(id => id > 0);
 
     if (retryItemIds.length > 0) {
       logger.info('Retry mode detected - will process only failed items', {
@@ -207,10 +205,6 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
             lastProcessedCount = progress.processed;
           }
 
-          // Get current job state to preserve failedItems
-          const currentJob = await migrationStateStore.getMigrationJob(jobId);
-          const existingFailedItems = currentJob?.progress?.failedItems || [];
-
           await updateMigrationProgress(jobId, {
             total: progress.total,
             processed: progress.processed,
@@ -218,7 +212,6 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
             failed: progress.failed,
             percent: progress.total > 0 ? Math.round((progress.processed / progress.total) * 100) : 0,
             lastUpdate: new Date(),
-            failedItems: existingFailedItems, // Preserve existing failed items
           });
           lastProgressUpdate = now;
         }
@@ -237,10 +230,6 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
     );
     await migrationStateStore.updateThroughputMetrics(jobId, finalThroughputMetrics);
 
-    // Get current job state to preserve failedItems for final update
-    const finalJob = await migrationStateStore.getMigrationJob(jobId);
-    const finalFailedItems = finalJob?.progress?.failedItems || [];
-
     await updateMigrationProgress(jobId, {
       total: result.processed,
       processed: result.processed,
@@ -248,7 +237,6 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
       failed: result.failed,
       percent: 100,
       lastUpdate: new Date(),
-      failedItems: finalFailedItems, // Preserve all collected failed items
     });
 
     // Store dry-run preview in metadata if available

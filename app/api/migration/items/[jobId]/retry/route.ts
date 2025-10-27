@@ -7,6 +7,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { migrationStateStore } from '@/lib/migration/state-store';
 import { runItemMigrationJob } from '@/lib/migration/items/runner';
 import { failureLogger } from '@/lib/migration/items/failure-logger';
+import { logger } from '@/lib/migration/logging';
 
 export const runtime = 'nodejs';
 
@@ -31,13 +32,11 @@ export async function POST(
     }
 
     // Check if there are failed items to retry
-    // Load from log file instead of in-memory array
-    const failedItems = await failureLogger.getFailedItems(jobId);
-    const failedCount = job.progress?.failed || 0;
+    const failedCountFromLog = await failureLogger.getFailedCount(jobId);
+    const failedCount = job.progress?.failed || failedCountFromLog || 0;
 
     // Allow retry if either log file has items OR failed count > 0
-    // (for backward compatibility with jobs that track count but not individual items)
-    if (failedItems.length === 0 && failedCount === 0) {
+    if (failedCount === 0) {
       return NextResponse.json(
         {
           error: 'No failed items',
@@ -48,8 +47,11 @@ export async function POST(
     }
 
     // Log if we have a count but no detailed items in log file
-    if (failedCount > 0 && failedItems.length === 0) {
-      console.warn(`Migration ${jobId} has ${failedCount} failures but no items in failures.log. Retry will re-run entire migration.`);
+    if (failedCount > 0 && failedCountFromLog === 0) {
+      logger.warn(
+        'Retry requested but failures.log has no detail entries; entire migration will rerun',
+        { jobId, failedCount }
+      );
     }
 
     // Extract migration config from job metadata
@@ -83,10 +85,13 @@ export async function POST(
     // The runner will pick up the failed items from the job state
     runItemMigrationJob(jobId)
       .then(() => {
-        console.log(`Migration ${jobId} retry completed successfully`);
+        logger.info('Migration retry completed successfully', { jobId });
       })
       .catch((error) => {
-        console.error(`Migration ${jobId} failed during retry:`, error);
+        logger.error('Migration retry failed', {
+          jobId,
+          error: error instanceof Error ? error.message : String(error),
+        });
       });
 
     return NextResponse.json(
@@ -94,13 +99,15 @@ export async function POST(
         success: true,
         message: 'Retrying failed items',
         jobId,
-        failedItemsCount: failedItems.length,
+        failedItemsCount: failedCount,
         retryAttempt: retryAttempts,
       },
-      { status: 200 }
+      { status: 202 }
     );
   } catch (error) {
-    console.error('Failed to retry migration:', error);
+    logger.error('Failed to retry migration', {
+      error: error instanceof Error ? error.message : String(error),
+    });
 
     return NextResponse.json(
       {

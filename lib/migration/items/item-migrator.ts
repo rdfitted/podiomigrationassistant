@@ -20,7 +20,7 @@ import {
   deleteItem,
 } from '../../podio/resources/items';
 import { ItemBatchProcessor, BatchProcessorConfig } from './batch-processor';
-import { migrationStateStore, MigrationJob } from '../state-store';
+import { migrationStateStore, MigrationJob, ErrorCategory, FailedItemDetail } from '../state-store';
 import { logger as migrationLogger, logMigrationEvent, logDuplicateDetection } from '../logging';
 import { convertFieldMappingToExternalIds } from './service';
 import {
@@ -1406,11 +1406,10 @@ export class ItemMigrator {
                       lastAttemptAt: new Date(),
                     };
 
-                    // Increment counter in state store
-                    await migrationStateStore.incrementFailedItemCount(migrationJob.id, 'validation');
-
-                    // Log full details to failures.log
-                    await failureLogger.logFailedItem(migrationJob.id, failedItemDetail);
+                    await Promise.all([
+                      migrationStateStore.incrementFailedItemCount(migrationJob.id, 'validation'),
+                      failureLogger.logFailedItem(migrationJob.id, failedItemDetail),
+                    ]);
                   }
 
                   // Dry-run mode: capture failed match info
@@ -1472,11 +1471,10 @@ export class ItemMigrator {
                     lastAttemptAt: new Date(),
                   };
 
-                  // Increment counter in state store
-                  await migrationStateStore.incrementFailedItemCount(migrationJob.id, 'validation');
-
-                  // Log full details to failures.log
-                  await failureLogger.logFailedItem(migrationJob.id, failedItemDetail);
+                  await Promise.all([
+                    migrationStateStore.incrementFailedItemCount(migrationJob.id, 'validation'),
+                    failureLogger.logFailedItem(migrationJob.id, failedItemDetail),
+                  ]);
                 }
 
                 // Dry-run mode: capture failed match info
@@ -1776,17 +1774,19 @@ export class ItemMigrator {
 
       // Consolidate failed items and save to state with error classification
       if (updateResult) {
+        const failedDetails: FailedItemDetail[] = [];
+        const categoryCounts: Partial<Record<ErrorCategory, number>> = {};
+
         for (const item of updateResult.failedItems) {
           result.failedItems.push({
-            sourceItemId: item.sourceItemId || 0, // Now tracked from batch processor
+            sourceItemId: item.sourceItemId || 0,
             error: item.error,
             index: item.index,
           });
 
-          // Save to state store and log file with classified error
           if (item.classifiedError) {
-            const failedItemDetail = {
-              sourceItemId: item.sourceItemId || 0, // Now tracked from batch processor
+            const failedItemDetail: FailedItemDetail = {
+              sourceItemId: item.sourceItemId || 0,
               targetItemId: (item.data as any).itemId,
               error: item.error,
               errorCategory: item.classifiedError.category,
@@ -1795,16 +1795,24 @@ export class ItemMigrator {
               lastAttemptAt: new Date(),
             };
 
-            // Increment counter in state store
-            await migrationStateStore.incrementFailedItemCount(migrationJob.id, item.classifiedError.category);
-
-            // Log full details to failures.log
-            await failureLogger.logFailedItem(migrationJob.id, failedItemDetail);
+            failedDetails.push(failedItemDetail);
+            categoryCounts[item.classifiedError.category] =
+              (categoryCounts[item.classifiedError.category] || 0) + 1;
           }
+        }
+
+        if (failedDetails.length > 0) {
+          await Promise.all([
+            migrationStateStore.incrementFailedItemCounts(migrationJob.id, categoryCounts),
+            failureLogger.logFailedItemsBulk(migrationJob.id, failedDetails),
+          ]);
         }
       }
 
       if (createResult) {
+        const failedDetails: FailedItemDetail[] = [];
+        const categoryCounts: Partial<Record<ErrorCategory, number>> = {};
+
         for (const item of createResult.failedItems) {
           result.failedItems.push({
             sourceItemId: item.sourceItemId || 0,
@@ -1812,9 +1820,8 @@ export class ItemMigrator {
             index: item.index,
           });
 
-          // Save to state store and log file with classified error
           if (item.classifiedError) {
-            const failedItemDetail = {
+            const failedItemDetail: FailedItemDetail = {
               sourceItemId: item.sourceItemId || 0,
               error: item.error,
               errorCategory: item.classifiedError.category,
@@ -1823,12 +1830,17 @@ export class ItemMigrator {
               lastAttemptAt: new Date(),
             };
 
-            // Increment counter in state store
-            await migrationStateStore.incrementFailedItemCount(migrationJob.id, item.classifiedError.category);
-
-            // Log full details to failures.log
-            await failureLogger.logFailedItem(migrationJob.id, failedItemDetail);
+            failedDetails.push(failedItemDetail);
+            categoryCounts[item.classifiedError.category] =
+              (categoryCounts[item.classifiedError.category] || 0) + 1;
           }
+        }
+
+        if (failedDetails.length > 0) {
+          await Promise.all([
+            migrationStateStore.incrementFailedItemCounts(migrationJob.id, categoryCounts),
+            failureLogger.logFailedItemsBulk(migrationJob.id, failedDetails),
+          ]);
         }
       }
 

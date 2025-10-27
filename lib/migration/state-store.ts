@@ -208,7 +208,7 @@ export class MigrationStateStore {
   async saveMigrationJob(job: MigrationJob): Promise<void> {
     const jobPath = this.getJobPath(job.id);
     // Use unique temp path to prevent concurrent write collisions
-    const tempPath = `${jobPath}.${crypto.randomUUID()}.tmp`;
+    const tempPath = `${jobPath}.${randomUUID()}.tmp`;
     const MAX_RETRIES = 3;
     let lastError: Error | null = null;
 
@@ -509,7 +509,23 @@ export class MigrationStateStore {
       throw new Error(`Migration job not found: ${jobId}`);
     }
 
-    job.progress = progress;
+    const mergedProgress: MigrationProgress = {
+      ...job.progress,
+      ...progress,
+    };
+
+    if (job.progress?.failedItemsByCategory || progress.failedItemsByCategory) {
+      mergedProgress.failedItemsByCategory = {
+        ...(job.progress?.failedItemsByCategory ?? {}),
+        ...(progress.failedItemsByCategory ?? {}),
+      };
+    }
+
+    if (!progress.failedItems && job.progress?.failedItems && !mergedProgress.failedItems) {
+      mergedProgress.failedItems = job.progress.failedItems;
+    }
+
+    job.progress = mergedProgress;
     await this.saveMigrationJob(job);
     logger.debug('Updated migration job progress', { jobId, progress });
   }
@@ -624,6 +640,25 @@ export class MigrationStateStore {
     jobId: string,
     errorCategory: ErrorCategory
   ): Promise<void> {
+    await this.incrementFailedItemCounts(jobId, { [errorCategory]: 1 });
+  }
+
+  async incrementFailedItemCounts(
+    jobId: string,
+    counts: Partial<Record<ErrorCategory, number>>
+  ): Promise<void> {
+    const entries: Array<[ErrorCategory, number]> = [];
+    for (const [category, value] of Object.entries(counts)) {
+      if (!value || value <= 0) {
+        continue;
+      }
+      entries.push([category as ErrorCategory, value]);
+    }
+
+    if (entries.length === 0) {
+      return;
+    }
+
     const job = await this.getMigrationJob(jobId);
     if (!job) {
       throw new Error(`Migration job not found: ${jobId}`);
@@ -640,7 +675,6 @@ export class MigrationStateStore {
       };
     }
 
-    // Initialize failedItemsByCategory if not present
     if (!job.progress.failedItemsByCategory) {
       job.progress.failedItemsByCategory = {
         network: 0,
@@ -652,18 +686,20 @@ export class MigrationStateStore {
       };
     }
 
-    // Increment category counter
-    job.progress.failedItemsByCategory[errorCategory] =
-      (job.progress.failedItemsByCategory[errorCategory] || 0) + 1;
+    let totalIncrement = 0;
+    for (const [category, value] of entries) {
+      job.progress.failedItemsByCategory[category] =
+        (job.progress.failedItemsByCategory[category] || 0) + value;
+      totalIncrement += value;
+    }
 
-    // Increment total failed counter
-    job.progress.failed = (job.progress.failed || 0) + 1;
+    job.progress.failed = (job.progress.failed || 0) + totalIncrement;
+    job.progress.lastUpdate = new Date();
 
     await this.saveMigrationJob(job);
-    logger.debug('Incremented failed item count', {
+    logger.debug('Incremented failed item counts', {
       jobId,
-      errorCategory,
-      newCount: job.progress.failedItemsByCategory[errorCategory],
+      updates: entries,
       totalFailed: job.progress.failed,
     });
   }

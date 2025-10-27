@@ -9,6 +9,7 @@ import { getAppStructureDetailed } from '../../podio/migration';
 import { logger } from '../logging';
 import { isJobActive } from '../job-lifecycle';
 import { failureLogger } from './failure-logger';
+import { maskPII } from '../utils/pii-masking';
 
 /**
  * Field types that are valid for matching
@@ -384,7 +385,7 @@ export async function getItemMigrationJob(
       : undefined,
     failedItems: failedItems.map(item => ({
       sourceItemId: item.sourceItemId,
-      error: item.error,
+      error: maskPII(item.error),
       timestamp: typeof item.lastAttemptAt === 'string'
         ? item.lastAttemptAt
         : item.lastAttemptAt.toISOString(),
