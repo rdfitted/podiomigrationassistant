@@ -8,6 +8,7 @@ import { ItemMigrationRequestPayload, ItemMigrationStatusResponse, ItemMigration
 import { getAppStructureDetailed } from '../../podio/migration';
 import { logger } from '../logging';
 import { isJobActive } from '../job-lifecycle';
+import { failureLogger } from './failure-logger';
 
 /**
  * Field types that are valid for matching
@@ -295,12 +296,27 @@ export async function getItemMigrationJob(
 
   const metadata = job.metadata as any;
 
-  // Calculate error statistics by category
-  const errorsByCategory: Record<string, { count: number; percentage: number; shouldRetry: boolean }> = {};
-  const failedItems = job.progress?.failedItems || [];
+  // Load failed items from log file instead of in-memory array
+  const failedItems = await failureLogger.getFailedItems(jobId);
 
-  if (failedItems.length > 0) {
-    // Count by category
+  // Calculate error statistics by category
+  // Use failedItemsByCategory from progress if available (more efficient)
+  const errorsByCategory: Record<string, { count: number; percentage: number; shouldRetry: boolean }> = {};
+
+  if (job.progress?.failedItemsByCategory) {
+    // Use the category counts from progress (more efficient, no need to count)
+    const totalFailed = job.progress.failed || 0;
+    for (const [category, count] of Object.entries(job.progress.failedItemsByCategory)) {
+      if (count > 0) {
+        errorsByCategory[category] = {
+          count,
+          percentage: totalFailed > 0 ? Math.round((count / totalFailed) * 100) : 0,
+          shouldRetry: category === 'network' || category === 'rate_limit' || category === 'unknown',
+        };
+      }
+    }
+  } else if (failedItems.length > 0) {
+    // Fallback: count from loaded failed items (backward compatibility)
     const categoryCounts = new Map<string, number>();
     for (const item of failedItems) {
       const category = item.errorCategory;

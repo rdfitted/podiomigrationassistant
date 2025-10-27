@@ -16,6 +16,7 @@ import {
 import { ThroughputCalculator } from './throughput-calculator';
 import { MemoryMonitor, logMemoryStats, forceGC } from '../memory-monitor';
 import { updateJobHeartbeat, getHeartbeatInterval } from '../job-lifecycle';
+import { failureLogger } from './failure-logger';
 
 /**
  * Run an item migration job in the background
@@ -73,7 +74,8 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
     });
 
     // Extract failed item IDs for retry (if this is a retry)
-    const failedItems = job.progress?.failedItems || [];
+    // Load from log file instead of in-memory array
+    const failedItems = await failureLogger.getFailedItems(jobId);
     const retryItemIds = failedItems
       .map(item => item.sourceItemId)
       .filter(id => id > 0); // Filter out invalid IDs (e.g., 0 from update failures)
@@ -98,14 +100,28 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
         };
       }
 
-      // Clear the old failedItems array and reset counters before starting retry
-      // New failures will be added via addFailedItem() during this retry attempt
-      logger.info('Clearing old failed items list and resetting counters for retry', { jobId });
+      // Clear the failures log file and reset counters before starting retry
+      // New failures will be added via incrementFailedItemCount() + failureLogger during this retry attempt
+      logger.info('Clearing failures log and resetting counters for retry', { jobId });
+      await failureLogger.clearFailedItems(jobId);
+
       if (job.progress) {
-        job.progress.failedItems = [];
-        job.progress.failed = 0; // Reset failed counter to stay in sync with failedItems array
+        job.progress.failed = 0; // Reset failed counter
         job.progress.processed = 0; // Reset processed counter for fresh retry stats
         job.progress.successful = 0; // Reset successful counter for fresh retry stats
+
+        // Reset failedItemsByCategory counters
+        if (job.progress.failedItemsByCategory) {
+          job.progress.failedItemsByCategory = {
+            network: 0,
+            validation: 0,
+            permission: 0,
+            rate_limit: 0,
+            duplicate: 0,
+            unknown: 0,
+          };
+        }
+
         await migrationStateStore.saveMigrationJob(job);
       }
     }

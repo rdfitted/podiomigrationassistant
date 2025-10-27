@@ -6,6 +6,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { migrationStateStore } from '@/lib/migration/state-store';
 import { runItemMigrationJob } from '@/lib/migration/items/runner';
+import { failureLogger } from '@/lib/migration/items/failure-logger';
 
 export const runtime = 'nodejs';
 
@@ -30,10 +31,11 @@ export async function POST(
     }
 
     // Check if there are failed items to retry
-    const failedItems = job.progress?.failedItems || [];
+    // Load from log file instead of in-memory array
+    const failedItems = await failureLogger.getFailedItems(jobId);
     const failedCount = job.progress?.failed || 0;
 
-    // Allow retry if either failedItems array is populated OR failed count > 0
+    // Allow retry if either log file has items OR failed count > 0
     // (for backward compatibility with jobs that track count but not individual items)
     if (failedItems.length === 0 && failedCount === 0) {
       return NextResponse.json(
@@ -45,9 +47,9 @@ export async function POST(
       );
     }
 
-    // Log if we have a count but no detailed items
+    // Log if we have a count but no detailed items in log file
     if (failedCount > 0 && failedItems.length === 0) {
-      console.warn(`Migration ${jobId} has ${failedCount} failures but no failedItems array. Retry will re-run entire migration.`);
+      console.warn(`Migration ${jobId} has ${failedCount} failures but no items in failures.log. Retry will re-run entire migration.`);
     }
 
     // Extract migration config from job metadata

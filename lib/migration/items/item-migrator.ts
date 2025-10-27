@@ -35,6 +35,7 @@ import { isFieldNotFoundError } from '../../podio/errors';
 import { getMigrationLogger, removeMigrationLogger, MigrationFileLogger } from '../file-logger';
 import { UpdateStatsTracker } from './update-stats-tracker';
 import { maskPII } from '../utils/pii-masking';
+import { failureLogger } from './failure-logger';
 
 /**
  * Migration mode
@@ -1393,17 +1394,23 @@ export class ItemMigrator {
                   };
                   result.failedItems.push(failedMatch);
 
-                  // Save to state store (non-dry-run only)
+                  // Save to state store and log file (non-dry-run only)
                   if (!config.dryRun) {
-                    await migrationStateStore.addFailedItem(migrationJob.id, {
+                    const failedItemDetail = {
                       sourceItemId: sourceItem.item_id,
                       targetItemId: undefined,
                       error: `No matching item found for ${sourceMatchField}=${matchValue}`,
-                      errorCategory: 'validation',
+                      errorCategory: 'validation' as const,
                       attemptCount: 1,
                       firstAttemptAt: new Date(),
                       lastAttemptAt: new Date(),
-                    });
+                    };
+
+                    // Increment counter in state store
+                    await migrationStateStore.incrementFailedItemCount(migrationJob.id, 'validation');
+
+                    // Log full details to failures.log
+                    await failureLogger.logFailedItem(migrationJob.id, failedItemDetail);
                   }
 
                   // Dry-run mode: capture failed match info
@@ -1453,17 +1460,23 @@ export class ItemMigrator {
                 };
                 result.failedItems.push(failedMatch);
 
-                // Save to state store (non-dry-run only)
+                // Save to state store and log file (non-dry-run only)
                 if (!config.dryRun) {
-                  await migrationStateStore.addFailedItem(migrationJob.id, {
+                  const failedItemDetail = {
                     sourceItemId: sourceItem.item_id,
                     targetItemId: undefined,
                     error: `Source match field '${sourceMatchField}' not found in item`,
-                    errorCategory: 'validation',
+                    errorCategory: 'validation' as const,
                     attemptCount: 1,
                     firstAttemptAt: new Date(),
                     lastAttemptAt: new Date(),
-                  });
+                  };
+
+                  // Increment counter in state store
+                  await migrationStateStore.incrementFailedItemCount(migrationJob.id, 'validation');
+
+                  // Log full details to failures.log
+                  await failureLogger.logFailedItem(migrationJob.id, failedItemDetail);
                 }
 
                 // Dry-run mode: capture failed match info
@@ -1770,9 +1783,9 @@ export class ItemMigrator {
             index: item.index,
           });
 
-          // Save to state store with classified error
+          // Save to state store and log file with classified error
           if (item.classifiedError) {
-            await migrationStateStore.addFailedItem(migrationJob.id, {
+            const failedItemDetail = {
               sourceItemId: item.sourceItemId || 0, // Now tracked from batch processor
               targetItemId: (item.data as any).itemId,
               error: item.error,
@@ -1780,7 +1793,13 @@ export class ItemMigrator {
               attemptCount: 1,
               firstAttemptAt: new Date(),
               lastAttemptAt: new Date(),
-            });
+            };
+
+            // Increment counter in state store
+            await migrationStateStore.incrementFailedItemCount(migrationJob.id, item.classifiedError.category);
+
+            // Log full details to failures.log
+            await failureLogger.logFailedItem(migrationJob.id, failedItemDetail);
           }
         }
       }
@@ -1793,16 +1812,22 @@ export class ItemMigrator {
             index: item.index,
           });
 
-          // Save to state store with classified error
+          // Save to state store and log file with classified error
           if (item.classifiedError) {
-            await migrationStateStore.addFailedItem(migrationJob.id, {
+            const failedItemDetail = {
               sourceItemId: item.sourceItemId || 0,
               error: item.error,
               errorCategory: item.classifiedError.category,
               attemptCount: 1,
               firstAttemptAt: new Date(),
               lastAttemptAt: new Date(),
-            });
+            };
+
+            // Increment counter in state store
+            await migrationStateStore.incrementFailedItemCount(migrationJob.id, item.classifiedError.category);
+
+            // Log full details to failures.log
+            await failureLogger.logFailedItem(migrationJob.id, failedItemDetail);
           }
         }
       }
