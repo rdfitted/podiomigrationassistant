@@ -328,6 +328,37 @@ export class MigrationStateStore {
         completedAt: step.completedAt ? new Date(step.completedAt) : undefined,
       }));
 
+      // Convert nested date fields in progress object
+      if (job.progress) {
+        // Convert throughput.estimatedCompletionTime
+        if (job.progress.throughput?.estimatedCompletionTime) {
+          job.progress.throughput.estimatedCompletionTime = new Date(job.progress.throughput.estimatedCompletionTime);
+        }
+
+        // Convert preRetrySnapshot.lastUpdate
+        if (job.progress.preRetrySnapshot?.lastUpdate) {
+          job.progress.preRetrySnapshot.lastUpdate = new Date(job.progress.preRetrySnapshot.lastUpdate);
+        }
+
+        // Convert batchCheckpoints dates
+        if (job.progress.batchCheckpoints) {
+          job.progress.batchCheckpoints = job.progress.batchCheckpoints.map(checkpoint => ({
+            ...checkpoint,
+            startedAt: new Date(checkpoint.startedAt),
+            completedAt: checkpoint.completedAt ? new Date(checkpoint.completedAt) : undefined,
+          }));
+        }
+
+        // Convert failedItems dates (deprecated but still present in some jobs)
+        if (job.progress.failedItems) {
+          job.progress.failedItems = job.progress.failedItems.map(item => ({
+            ...item,
+            firstAttemptAt: new Date(item.firstAttemptAt),
+            lastAttemptAt: new Date(item.lastAttemptAt),
+          }));
+        }
+      }
+
       return job;
     } catch (error: unknown) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
