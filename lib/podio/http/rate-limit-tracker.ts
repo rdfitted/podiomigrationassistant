@@ -30,7 +30,10 @@ export interface RateLimitState {
  * Monitors API quota and provides pause/resume logic
  */
 export class RateLimitTracker {
+  /** Current rate limit state, null if not yet initialized */
   private state: RateLimitState | null = null;
+
+  /** Set of registered state change listeners */
   private listeners: Set<(state: RateLimitState) => void> = new Set();
 
   /**
@@ -115,6 +118,7 @@ export class RateLimitTracker {
 
   /**
    * Get current rate limit state
+   * @returns Current rate limit state, or null if not yet initialized
    */
   getState(): RateLimitState | null {
     return this.state;
@@ -312,6 +316,8 @@ export class RateLimitTracker {
 
   /**
    * Notify all listeners of state change
+   * Safely invokes each registered listener, logging errors without throwing
+   * @private
    */
   private notifyListeners(): void {
     if (this.state) {
@@ -338,6 +344,7 @@ export class RateLimitTracker {
 
   /**
    * Check if we have rate limit information
+   * @returns True if rate limit state is available, false otherwise
    */
   hasState(): boolean {
     return this.state !== null;
@@ -345,6 +352,7 @@ export class RateLimitTracker {
 
   /**
    * Get formatted status string for logging
+   * @returns Human-readable status string with quota usage and reset time, or "No rate limit data" if unavailable
    */
   getStatus(): string {
     if (!this.state) {
