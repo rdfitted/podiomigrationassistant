@@ -85,6 +85,8 @@ export interface MigrationConfig {
   transferFiles?: boolean;
   /** Progress callback */
   onProgress?: (progress: { total: number; processed: number; successful: number; failed: number }) => void | Promise<void>;
+  /** Rate limit pause callback */
+  onRateLimitPause?: (delayMs: number, resumeAt: Date, reason: 'batch_failures' | 'pre_batch_quota') => void | Promise<void>;
   /** Optional override for target prefetch timeout (ms). Default: 4 hours */
   prefetchTimeoutMs?: number;
   /** Optional override for prefetch health check interval (ms). Default: 5 minutes */
@@ -795,6 +797,38 @@ export class ItemMigrator {
           index,
           error,
         });
+      });
+
+      // Track rate limit pauses
+      let rateLimitPauseStart: number | null = null;
+      processor.on('rateLimitPause', ({ resumeAt, reason }) => {
+        rateLimitPauseStart = Date.now();
+        migrationLogger.info('Rate limit pause started', {
+          migrationId: migrationJob.id,
+          resumeAt: resumeAt.toISOString(),
+          reason,
+        });
+      });
+
+      processor.on('rateLimitResume', () => {
+        if (rateLimitPauseStart !== null) {
+          const delayMs = Date.now() - rateLimitPauseStart;
+          migrationLogger.info('Rate limit pause ended', {
+            migrationId: migrationJob.id,
+            delayMs,
+            delaySeconds: Math.round(delayMs / 1000),
+          });
+
+          // Call the callback to record the pause
+          if (config.onRateLimitPause) {
+            const resumeAt = new Date(); // Already resumed, so pass current time
+            config.onRateLimitPause(delayMs, resumeAt, 'batch_failures').catch((err) => {
+              migrationLogger.error('Failed to record rate limit pause', { error: err });
+            });
+          }
+
+          rateLimitPauseStart = null;
+        }
       });
 
       // Get match field info if provided
