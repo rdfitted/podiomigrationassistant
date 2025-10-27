@@ -16,6 +16,7 @@ import {
 import { ThroughputCalculator } from './throughput-calculator';
 import { MemoryMonitor, logMemoryStats, forceGC } from '../memory-monitor';
 import { updateJobHeartbeat, getHeartbeatInterval } from '../job-lifecycle';
+import { failureLogger } from './failure-logger';
 
 /**
  * Run an item migration job in the background
@@ -73,10 +74,9 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
     });
 
     // Extract failed item IDs for retry (if this is a retry)
-    const failedItems = job.progress?.failedItems || [];
-    const retryItemIds = failedItems
-      .map(item => item.sourceItemId)
-      .filter(id => id > 0); // Filter out invalid IDs (e.g., 0 from update failures)
+    // Load lightweight list from the failures log
+    const retryItemIds = (await failureLogger.getFailedItemIds(jobId))
+      .filter(id => id > 0);
 
     if (retryItemIds.length > 0) {
       logger.info('Retry mode detected - will process only failed items', {
@@ -98,14 +98,28 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
         };
       }
 
-      // Clear the old failedItems array and reset counters before starting retry
-      // New failures will be added via addFailedItem() during this retry attempt
-      logger.info('Clearing old failed items list and resetting counters for retry', { jobId });
+      // Clear the failures log file and reset counters before starting retry
+      // New failures will be added via incrementFailedItemCount() + failureLogger during this retry attempt
+      logger.info('Clearing failures log and resetting counters for retry', { jobId });
+      await failureLogger.clearFailedItems(jobId);
+
       if (job.progress) {
-        job.progress.failedItems = [];
-        job.progress.failed = 0; // Reset failed counter to stay in sync with failedItems array
+        job.progress.failed = 0; // Reset failed counter
         job.progress.processed = 0; // Reset processed counter for fresh retry stats
         job.progress.successful = 0; // Reset successful counter for fresh retry stats
+
+        // Reset failedItemsByCategory counters
+        if (job.progress.failedItemsByCategory) {
+          job.progress.failedItemsByCategory = {
+            network: 0,
+            validation: 0,
+            permission: 0,
+            rate_limit: 0,
+            duplicate: 0,
+            unknown: 0,
+          };
+        }
+
         await migrationStateStore.saveMigrationJob(job);
       }
     }
@@ -191,10 +205,6 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
             lastProcessedCount = progress.processed;
           }
 
-          // Get current job state to preserve failedItems
-          const currentJob = await migrationStateStore.getMigrationJob(jobId);
-          const existingFailedItems = currentJob?.progress?.failedItems || [];
-
           await updateMigrationProgress(jobId, {
             total: progress.total,
             processed: progress.processed,
@@ -202,7 +212,6 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
             failed: progress.failed,
             percent: progress.total > 0 ? Math.round((progress.processed / progress.total) * 100) : 0,
             lastUpdate: new Date(),
-            failedItems: existingFailedItems, // Preserve existing failed items
           });
           lastProgressUpdate = now;
         }
@@ -221,10 +230,6 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
     );
     await migrationStateStore.updateThroughputMetrics(jobId, finalThroughputMetrics);
 
-    // Get current job state to preserve failedItems for final update
-    const finalJob = await migrationStateStore.getMigrationJob(jobId);
-    const finalFailedItems = finalJob?.progress?.failedItems || [];
-
     await updateMigrationProgress(jobId, {
       total: result.processed,
       processed: result.processed,
@@ -232,7 +237,6 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
       failed: result.failed,
       percent: 100,
       lastUpdate: new Date(),
-      failedItems: finalFailedItems, // Preserve all collected failed items
     });
 
     // Store dry-run preview in metadata if available

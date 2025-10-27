@@ -117,7 +117,10 @@ export interface MigrationProgress {
   lastUpdate: Date;
   throughput?: ThroughputMetrics;
   batchCheckpoints?: MigrationBatchCheckpoint[];
+  /** @deprecated Use failure-logger.ts to read failed items from log file instead */
   failedItems?: FailedItemDetail[];
+  /** Failed items count by error category (summary only, details in logs/migrations/{jobId}/failures.log) */
+  failedItemsByCategory?: Record<ErrorCategory, number>;
   /** Snapshot of progress before retry was initiated (for displaying pre-retry state) */
   preRetrySnapshot?: ProgressSnapshot;
 }
@@ -205,7 +208,7 @@ export class MigrationStateStore {
   async saveMigrationJob(job: MigrationJob): Promise<void> {
     const jobPath = this.getJobPath(job.id);
     // Use unique temp path to prevent concurrent write collisions
-    const tempPath = `${jobPath}.${crypto.randomUUID()}.tmp`;
+    const tempPath = `${jobPath}.${randomUUID()}.tmp`;
     const MAX_RETRIES = 3;
     let lastError: Error | null = null;
 
@@ -506,7 +509,23 @@ export class MigrationStateStore {
       throw new Error(`Migration job not found: ${jobId}`);
     }
 
-    job.progress = progress;
+    const mergedProgress: MigrationProgress = {
+      ...job.progress,
+      ...progress,
+    };
+
+    if (job.progress?.failedItemsByCategory || progress.failedItemsByCategory) {
+      mergedProgress.failedItemsByCategory = {
+        ...(job.progress?.failedItemsByCategory ?? {}),
+        ...(progress.failedItemsByCategory ?? {}),
+      };
+    }
+
+    if (!progress.failedItems && job.progress?.failedItems && !mergedProgress.failedItems) {
+      mergedProgress.failedItems = job.progress.failedItems;
+    }
+
+    job.progress = mergedProgress;
     await this.saveMigrationJob(job);
     logger.debug('Updated migration job progress', { jobId, progress });
   }
@@ -613,12 +632,33 @@ export class MigrationStateStore {
   }
 
   /**
-   * Add a failed item to the migration
+   * Increment failed item count by error category
+   * Used instead of storing full failed item details in state
+   * Full details are stored in logs/migrations/{jobId}/failures.log
    */
-  async addFailedItem(
+  async incrementFailedItemCount(
     jobId: string,
-    failedItem: FailedItemDetail
+    errorCategory: ErrorCategory
   ): Promise<void> {
+    await this.incrementFailedItemCounts(jobId, { [errorCategory]: 1 });
+  }
+
+  async incrementFailedItemCounts(
+    jobId: string,
+    counts: Partial<Record<ErrorCategory, number>>
+  ): Promise<void> {
+    const entries: Array<[ErrorCategory, number]> = [];
+    for (const [category, value] of Object.entries(counts)) {
+      if (!value || value <= 0) {
+        continue;
+      }
+      entries.push([category as ErrorCategory, value]);
+    }
+
+    if (entries.length === 0) {
+      return;
+    }
+
     const job = await this.getMigrationJob(jobId);
     if (!job) {
       throw new Error(`Migration job not found: ${jobId}`);
@@ -635,29 +675,50 @@ export class MigrationStateStore {
       };
     }
 
-    if (!job.progress.failedItems) {
-      job.progress.failedItems = [];
+    if (!job.progress.failedItemsByCategory) {
+      job.progress.failedItemsByCategory = {
+        network: 0,
+        validation: 0,
+        permission: 0,
+        rate_limit: 0,
+        duplicate: 0,
+        unknown: 0,
+      };
     }
 
-    // Check if this item already exists (by sourceItemId)
-    const existingIndex = job.progress.failedItems.findIndex(
-      (item) => item.sourceItemId === failedItem.sourceItemId
-    );
-
-    if (existingIndex >= 0) {
-      // Update existing failed item (increment attempt count)
-      job.progress.failedItems[existingIndex] = failedItem;
-    } else {
-      // Add new failed item
-      job.progress.failedItems.push(failedItem);
+    let totalIncrement = 0;
+    for (const [category, value] of entries) {
+      job.progress.failedItemsByCategory[category] =
+        (job.progress.failedItemsByCategory[category] || 0) + value;
+      totalIncrement += value;
     }
+
+    job.progress.failed = (job.progress.failed || 0) + totalIncrement;
+    job.progress.lastUpdate = new Date();
 
     await this.saveMigrationJob(job);
-    logger.debug('Added failed item', {
+    logger.debug('Incremented failed item counts', {
+      jobId,
+      updates: entries,
+      totalFailed: job.progress.failed,
+    });
+  }
+
+  /**
+   * @deprecated Use incrementFailedItemCount() and failure-logger.ts instead
+   * This method is kept for backward compatibility but should not be used
+   */
+  async addFailedItem(
+    jobId: string,
+    failedItem: FailedItemDetail
+  ): Promise<void> {
+    logger.warn('addFailedItem() is deprecated - use incrementFailedItemCount() + failure-logger.ts instead', {
       jobId,
       sourceItemId: failedItem.sourceItemId,
-      attemptCount: failedItem.attemptCount,
     });
+
+    // Forward to new method for backward compatibility
+    await this.incrementFailedItemCount(jobId, failedItem.errorCategory);
   }
 
   /**
