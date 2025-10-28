@@ -36,7 +36,7 @@ During a migration, multiple operations happen simultaneously:
 ### Corruption Scenarios
 
 #### Scenario 1: Concurrent Writes (Lost Updates)
-```
+```text
 T0: Thread A reads job (progress: 100)
 T1: Thread B reads job (progress: 100)
 T2: Thread A writes (progress: 110)
@@ -44,7 +44,7 @@ T3: Thread B writes (progress: 105) ← Overwrites A's update!
 ```
 
 #### Scenario 2: Read During Write (Corrupted JSON)
-```
+```text
 T0: Writer starts atomic write (write temp → rename)
 T1: Reader tries to read during rename
 T2: Reader gets partial content or JSON parse error
@@ -193,7 +193,7 @@ private deserializeJob(job: MigrationJob): MigrationJob {
    ```
 
 2. **Refresh the page multiple times during migration:**
-   ```
+   ```text
    While migration is running:
    - Press F5 / Cmd+R repeatedly
    - Or close and reopen the tab
@@ -264,18 +264,18 @@ If needed, previous version can read files created by new version.
 ### Log Messages
 
 **Successful recovery:**
-```
+```text
 WARN: Recovered job from backup { jobId: '...' }
 INFO: Successfully recovered and restored corrupted job file { jobId: '...' }
 ```
 
 **Retry activity:**
-```
+```text
 WARN: Failed to read migration job, retrying { jobId, attempt: 2, backoffMs: 100 }
 ```
 
 **Corruption detected:**
-```
+```text
 ERROR: JSON parse error - file may be corrupted { jobId, attempt: 1 }
 ```
 

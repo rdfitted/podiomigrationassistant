@@ -189,24 +189,13 @@ export class MigrationStateStore {
    * This ensures all writes for a given jobId are serialized
    */
   private async queueWrite(jobId: string, writeOperation: () => Promise<void>): Promise<void> {
-    // Wait for any pending write operation for this jobId
-    const pendingWrite = this.writeQueue.get(jobId);
-    if (pendingWrite) {
-      try {
-        await pendingWrite;
-      } catch {
-        // Ignore errors from previous writes, we'll try our write anyway
-      }
-    }
-
-    // Queue our write operation
-    const writePromise = writeOperation();
+    const prev = this.writeQueue.get(jobId) ?? Promise.resolve();
+    // Swallow previous errors so the chain continues
+    const writePromise = prev.catch(() => void 0).then(() => writeOperation());
     this.writeQueue.set(jobId, writePromise);
-
     try {
       await writePromise;
     } finally {
-      // Clean up the queue entry if it's still our promise
       if (this.writeQueue.get(jobId) === writePromise) {
         this.writeQueue.delete(jobId);
       }
@@ -221,10 +210,25 @@ export class MigrationStateStore {
     const backupFilePath = path.join(this.backupPath, `${jobId}.backup.json`);
 
     try {
+      // Ensure backup directory exists
+      await fs.mkdir(this.backupPath, { recursive: true });
+
       // Check if job file exists
       await fs.access(jobPath);
-      // Copy to backup location
-      await fs.copyFile(jobPath, backupFilePath);
+
+      // Read and validate JSON before overwriting stable backup
+      const content = await fs.readFile(jobPath, 'utf-8');
+      try {
+        JSON.parse(content);
+        // Valid JSON - safe to use as backup
+        await fs.copyFile(jobPath, backupFilePath);
+      } catch {
+        // Corrupted source - save with distinct name to avoid overwriting good backup
+        const corruptedBackupPath = path.join(this.backupPath, `${jobId}.backup.corrupted.${Date.now()}.json`);
+        await fs.copyFile(jobPath, corruptedBackupPath);
+        logger.warn('Skipped overwriting stable backup with corrupted source', { jobId, corruptedBackupPath });
+        return;
+      }
       logger.debug('Created backup for job', { jobId });
     } catch (error: any) {
       // If file doesn't exist (ENOENT), that's okay - no backup needed
@@ -340,11 +344,13 @@ export class MigrationStateStore {
    * Save migration job to disk with atomic write, verification, and retry
    * Now uses write queue to prevent concurrent writes and creates backups
    */
-  async saveMigrationJob(job: MigrationJob): Promise<void> {
+  async saveMigrationJob(job: MigrationJob, opts: { skipBackup?: boolean } = {}): Promise<void> {
     // Queue the write operation to prevent concurrent writes
     await this.queueWrite(job.id, async () => {
-      // Create backup before writing
-      await this.createBackup(job.id);
+      // Create backup before writing unless explicitly skipped (e.g., recovery)
+      if (!opts.skipBackup) {
+        await this.createBackup(job.id);
+      }
 
       const jobPath = this.getJobPath(job.id);
       // Use unique temp path to prevent concurrent write collisions
@@ -359,6 +365,7 @@ export class MigrationStateStore {
 
           // Serialize to JSON
           const jsonContent = JSON.stringify(job, null, 2);
+          const expectedBytes = Buffer.byteLength(jsonContent, 'utf8');
 
           // Write to temp file
           await fs.writeFile(tempPath, jsonContent, 'utf-8');
@@ -379,17 +386,30 @@ export class MigrationStateStore {
             throw new Error(`Write verification failed: Invalid JSON in temp file - ${parseError}`);
           }
 
-          // Verify content matches (length check for performance)
-          if (writtenContent.length !== jsonContent.length) {
-            throw new Error(`Write verification failed: Size mismatch (expected ${jsonContent.length}, got ${writtenContent.length})`);
+          // Verify content matches (byte-length check)
+          const writtenBytes = Buffer.byteLength(writtenContent, 'utf8');
+          if (writtenBytes !== expectedBytes) {
+            throw new Error(`Write verification failed: Size mismatch (expected ${expectedBytes}, got ${writtenBytes})`);
           }
 
           // Atomic rename (only after verification passes)
           await fs.rename(tempPath, jobPath);
 
+          // Best-effort fsync of parent directory to persist the rename
+          try {
+            const dirHandle = await fs.open(this.storePath, 'r');
+            try {
+              await dirHandle.sync();
+            } finally {
+              await dirHandle.close();
+            }
+          } catch {
+            // Ignore if not supported on this platform
+          }
+
           logger.debug('Saved migration job', {
             jobId: job.id,
-            sizeBytes: jsonContent.length,
+            sizeBytes: expectedBytes,
             attempt: attempt > 1 ? attempt : undefined,
           });
 
@@ -506,7 +526,7 @@ export class MigrationStateStore {
             if (recovered) {
               // Restore the recovered version to the main file
               try {
-                await this.saveMigrationJob(recovered);
+                await this.saveMigrationJob(recovered, { skipBackup: true });
                 logger.info('Successfully recovered and restored corrupted job file', { jobId });
                 return recovered;
               } catch (saveError) {
@@ -733,6 +753,7 @@ export class MigrationStateStore {
    */
   async deleteMigrationJob(jobId: string): Promise<void> {
     const jobPath = this.getJobPath(jobId);
+    const backupFilePath = path.join(this.backupPath, `${jobId}.backup.json`);
 
     try {
       await fs.unlink(jobPath);
@@ -741,6 +762,15 @@ export class MigrationStateStore {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
         logger.error('Failed to delete migration job', { jobId, error });
         throw error;
+      }
+    }
+
+    // Best-effort cleanup of backup
+    try {
+      await fs.unlink(backupFilePath);
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        logger.warn('Failed to delete job backup', { jobId, error });
       }
     }
   }
