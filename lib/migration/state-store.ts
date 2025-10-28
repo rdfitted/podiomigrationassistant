@@ -220,12 +220,20 @@ export class MigrationStateStore {
       const content = await fs.readFile(jobPath, 'utf-8');
       try {
         JSON.parse(content);
-        // Valid JSON - safe to use as backup
-        await fs.copyFile(jobPath, backupFilePath);
+        // Valid JSON — persist exactly what we validated (avoids TOCTOU)
+        const tmp = `${backupFilePath}.${randomUUID()}.tmp`;
+        await fs.writeFile(tmp, content, 'utf8');
+        const fh = await fs.open(tmp, 'r+');
+        try {
+          await fh.sync();
+        } finally {
+          await fh.close();
+        }
+        await fs.rename(tmp, backupFilePath);
       } catch {
         // Corrupted source - save with distinct name to avoid overwriting good backup
         const corruptedBackupPath = path.join(this.backupPath, `${jobId}.backup.corrupted.${Date.now()}.json`);
-        await fs.copyFile(jobPath, corruptedBackupPath);
+        await fs.writeFile(corruptedBackupPath, content, 'utf8');
         logger.warn('Skipped overwriting stable backup with corrupted source', { jobId, corruptedBackupPath });
         return;
       }
