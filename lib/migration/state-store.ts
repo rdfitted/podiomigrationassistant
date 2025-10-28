@@ -261,7 +261,11 @@ export class MigrationStateStore {
       // Convert date strings back to Date objects
       return this.deserializeJob(job);
     } catch (error: any) {
-      logger.error('Failed to recover from backup', { jobId, error: error?.message });
+      if (error?.code === 'ENOENT') {
+        logger.warn('No backup found for recovery', { jobId });
+      } else {
+        logger.error('Failed to recover from backup', { jobId, error: error?.message });
+      }
       return null;
     }
   }
@@ -280,15 +284,15 @@ export class MigrationStateStore {
     if (job.progress?.lastUpdate) {
       job.progress.lastUpdate = new Date(job.progress.lastUpdate);
     }
-    job.errors = job.errors.map(err => ({
+    job.errors = Array.isArray(job.errors) ? job.errors.map(err => ({
       ...err,
       timestamp: new Date(err.timestamp),
-    }));
-    job.steps = job.steps.map(step => ({
+    })) : [];
+    job.steps = Array.isArray(job.steps) ? job.steps.map(step => ({
       ...step,
       startedAt: step.startedAt ? new Date(step.startedAt) : undefined,
       completedAt: step.completedAt ? new Date(step.completedAt) : undefined,
-    }));
+    })) : [];
 
     // Convert nested date fields in progress object
     if (job.progress) {
@@ -308,7 +312,7 @@ export class MigrationStateStore {
         }));
       }
 
-      if (job.progress.failedItems) {
+      if (Array.isArray(job.progress.failedItems)) {
         job.progress.failedItems = job.progress.failedItems.map(item => ({
           ...item,
           firstAttemptAt: new Date(item.firstAttemptAt),
@@ -763,24 +767,27 @@ export class MigrationStateStore {
     const jobPath = this.getJobPath(jobId);
     const backupFilePath = path.join(this.backupPath, `${jobId}.backup.json`);
 
-    try {
-      await fs.unlink(jobPath);
-      logger.info('Deleted migration job', { jobId });
-    } catch (error: unknown) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        logger.error('Failed to delete migration job', { jobId, error });
-        throw error;
+    // Serialize with write queue to prevent race with in-flight saves
+    await this.queueWrite(jobId, async () => {
+      try {
+        await fs.unlink(jobPath);
+        logger.info('Deleted migration job', { jobId });
+      } catch (error: unknown) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          logger.error('Failed to delete migration job', { jobId, error });
+          throw error;
+        }
       }
-    }
 
-    // Best-effort cleanup of backup
-    try {
-      await fs.unlink(backupFilePath);
-    } catch (error: unknown) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        logger.warn('Failed to delete job backup', { jobId, error });
+      // Best-effort cleanup of backup
+      try {
+        await fs.unlink(backupFilePath);
+      } catch (error: unknown) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          logger.warn('Failed to delete job backup', { jobId, error });
+        }
       }
-    }
+    });
   }
 
   /**
