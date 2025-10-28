@@ -153,12 +153,21 @@ export interface MigrationJob {
  *
  * Stores migration job state in JSON files for tracking progress
  * and enabling recovery from failures.
+ *
+ * Features:
+ * - Write queue to serialize all write operations (prevents concurrent write corruption)
+ * - Retry logic for reads with exponential backoff
+ * - Automatic backup before writes
+ * - Recovery from corrupted files
  */
 export class MigrationStateStore {
   private storePath: string;
+  private writeQueue: Map<string, Promise<void>> = new Map();
+  private backupPath: string;
 
   constructor(storePath = 'data/migrations') {
     this.storePath = storePath;
+    this.backupPath = `${storePath}/.backups`;
   }
 
   /**
@@ -167,11 +176,136 @@ export class MigrationStateStore {
   async initialize(): Promise<void> {
     try {
       await fs.mkdir(this.storePath, { recursive: true });
-      logger.info('MigrationStateStore initialized', { storePath: this.storePath });
+      await fs.mkdir(this.backupPath, { recursive: true });
+      logger.info('MigrationStateStore initialized', { storePath: this.storePath, backupPath: this.backupPath });
     } catch (error) {
       logger.error('Failed to initialize MigrationStateStore', { error });
       throw error;
     }
+  }
+
+  /**
+   * Queue a write operation to prevent concurrent writes to the same file
+   * This ensures all writes for a given jobId are serialized
+   */
+  private async queueWrite(jobId: string, writeOperation: () => Promise<void>): Promise<void> {
+    // Wait for any pending write operation for this jobId
+    const pendingWrite = this.writeQueue.get(jobId);
+    if (pendingWrite) {
+      try {
+        await pendingWrite;
+      } catch {
+        // Ignore errors from previous writes, we'll try our write anyway
+      }
+    }
+
+    // Queue our write operation
+    const writePromise = writeOperation();
+    this.writeQueue.set(jobId, writePromise);
+
+    try {
+      await writePromise;
+    } finally {
+      // Clean up the queue entry if it's still our promise
+      if (this.writeQueue.get(jobId) === writePromise) {
+        this.writeQueue.delete(jobId);
+      }
+    }
+  }
+
+  /**
+   * Create a backup of the job file before writing
+   */
+  private async createBackup(jobId: string): Promise<void> {
+    const jobPath = this.getJobPath(jobId);
+    const backupFilePath = path.join(this.backupPath, `${jobId}.backup.json`);
+
+    try {
+      // Check if job file exists
+      await fs.access(jobPath);
+      // Copy to backup location
+      await fs.copyFile(jobPath, backupFilePath);
+      logger.debug('Created backup for job', { jobId });
+    } catch (error: any) {
+      // If file doesn't exist (ENOENT), that's okay - no backup needed
+      if (error?.code !== 'ENOENT') {
+        logger.warn('Failed to create backup', { jobId, error: error?.message });
+      }
+    }
+  }
+
+  /**
+   * Attempt to recover a corrupted job file from backup
+   */
+  private async recoverFromBackup(jobId: string): Promise<MigrationJob | null> {
+    const backupFilePath = path.join(this.backupPath, `${jobId}.backup.json`);
+
+    try {
+      const content = await fs.readFile(backupFilePath, 'utf-8');
+      const job = JSON.parse(content) as MigrationJob;
+
+      logger.warn('Recovered job from backup', { jobId });
+
+      // Convert date strings back to Date objects
+      return this.deserializeJob(job);
+    } catch (error: any) {
+      logger.error('Failed to recover from backup', { jobId, error: error?.message });
+      return null;
+    }
+  }
+
+  /**
+   * Convert date strings back to Date objects
+   */
+  private deserializeJob(job: MigrationJob): MigrationJob {
+    job.startedAt = new Date(job.startedAt);
+    if (job.completedAt) {
+      job.completedAt = new Date(job.completedAt);
+    }
+    if (job.lastHeartbeat) {
+      job.lastHeartbeat = new Date(job.lastHeartbeat);
+    }
+    if (job.progress?.lastUpdate) {
+      job.progress.lastUpdate = new Date(job.progress.lastUpdate);
+    }
+    job.errors = job.errors.map(err => ({
+      ...err,
+      timestamp: new Date(err.timestamp),
+    }));
+    job.steps = job.steps.map(step => ({
+      ...step,
+      startedAt: step.startedAt ? new Date(step.startedAt) : undefined,
+      completedAt: step.completedAt ? new Date(step.completedAt) : undefined,
+    }));
+
+    // Convert nested date fields in progress object
+    if (job.progress) {
+      if (job.progress.throughput?.estimatedCompletionTime) {
+        job.progress.throughput.estimatedCompletionTime = new Date(job.progress.throughput.estimatedCompletionTime);
+      }
+
+      if (job.progress.preRetrySnapshot?.lastUpdate) {
+        job.progress.preRetrySnapshot.lastUpdate = new Date(job.progress.preRetrySnapshot.lastUpdate);
+      }
+
+      if (job.progress.batchCheckpoints) {
+        job.progress.batchCheckpoints = job.progress.batchCheckpoints.map(checkpoint => ({
+          ...checkpoint,
+          startedAt: new Date(checkpoint.startedAt),
+          completedAt: checkpoint.completedAt ? new Date(checkpoint.completedAt) : undefined,
+        }));
+      }
+
+      if (job.progress.failedItems) {
+        job.progress.failedItems = job.progress.failedItems.map(item => ({
+          ...item,
+          firstAttemptAt: new Date(item.firstAttemptAt),
+          lastAttemptAt: new Date(item.lastAttemptAt),
+        }));
+      }
+    }
+
+    return job;
   }
 
   /**
@@ -204,97 +338,104 @@ export class MigrationStateStore {
 
   /**
    * Save migration job to disk with atomic write, verification, and retry
+   * Now uses write queue to prevent concurrent writes and creates backups
    */
   async saveMigrationJob(job: MigrationJob): Promise<void> {
-    const jobPath = this.getJobPath(job.id);
-    // Use unique temp path to prevent concurrent write collisions
-    const tempPath = `${jobPath}.${randomUUID()}.tmp`;
-    const MAX_RETRIES = 3;
-    let lastError: Error | null = null;
+    // Queue the write operation to prevent concurrent writes
+    await this.queueWrite(job.id, async () => {
+      // Create backup before writing
+      await this.createBackup(job.id);
 
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      try {
-        // Ensure directory exists
-        await fs.mkdir(this.storePath, { recursive: true });
+      const jobPath = this.getJobPath(job.id);
+      // Use unique temp path to prevent concurrent write collisions
+      const tempPath = `${jobPath}.${randomUUID()}.tmp`;
+      const MAX_RETRIES = 3;
+      let lastError: Error | null = null;
 
-        // Serialize to JSON
-        const jsonContent = JSON.stringify(job, null, 2);
-
-        // Write to temp file
-        await fs.writeFile(tempPath, jsonContent, 'utf-8');
-
-        // Force flush to disk (fsync)
-        const fileHandle = await fs.open(tempPath, 'r+');
+      for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
         try {
-          await fileHandle.sync();
-        } finally {
-          await fileHandle.close();
-        }
+          // Ensure directory exists
+          await fs.mkdir(this.storePath, { recursive: true });
 
-        // Verify write by reading back and parsing
-        const writtenContent = await fs.readFile(tempPath, 'utf-8');
-        try {
-          JSON.parse(writtenContent); // Validate JSON structure
-        } catch (parseError) {
-          throw new Error(`Write verification failed: Invalid JSON in temp file - ${parseError}`);
-        }
+          // Serialize to JSON
+          const jsonContent = JSON.stringify(job, null, 2);
 
-        // Verify content matches (length check for performance)
-        if (writtenContent.length !== jsonContent.length) {
-          throw new Error(`Write verification failed: Size mismatch (expected ${jsonContent.length}, got ${writtenContent.length})`);
-        }
+          // Write to temp file
+          await fs.writeFile(tempPath, jsonContent, 'utf-8');
 
-        // Atomic rename (only after verification passes)
-        await fs.rename(tempPath, jobPath);
-
-        logger.debug('Saved migration job', {
-          jobId: job.id,
-          sizeBytes: jsonContent.length,
-          attempt: attempt > 1 ? attempt : undefined,
-        });
-
-        return; // Success!
-      } catch (error) {
-        lastError = error as Error;
-
-        // With unique temp files, cross-writer rename collisions are eliminated
-        // Log retry attempt
-        if (attempt < MAX_RETRIES) {
-          logger.warn('Failed to save migration job, retrying', {
-            jobId: job.id,
-            attempt,
-            maxRetries: MAX_RETRIES,
-            error: lastError.message,
-          });
-
-          // Clean up temp file before retry
+          // Force flush to disk (fsync)
+          const fileHandle = await fs.open(tempPath, 'r+');
           try {
-            await fs.unlink(tempPath);
-          } catch {
-            // Ignore cleanup errors
+            await fileHandle.sync();
+          } finally {
+            await fileHandle.close();
           }
 
-          // Wait before retry (exponential backoff: 100ms, 200ms, 400ms)
-          await new Promise(resolve => setTimeout(resolve, 100 * Math.pow(2, attempt - 1)));
+          // Verify write by reading back and parsing
+          const writtenContent = await fs.readFile(tempPath, 'utf-8');
+          try {
+            JSON.parse(writtenContent); // Validate JSON structure
+          } catch (parseError) {
+            throw new Error(`Write verification failed: Invalid JSON in temp file - ${parseError}`);
+          }
+
+          // Verify content matches (length check for performance)
+          if (writtenContent.length !== jsonContent.length) {
+            throw new Error(`Write verification failed: Size mismatch (expected ${jsonContent.length}, got ${writtenContent.length})`);
+          }
+
+          // Atomic rename (only after verification passes)
+          await fs.rename(tempPath, jobPath);
+
+          logger.debug('Saved migration job', {
+            jobId: job.id,
+            sizeBytes: jsonContent.length,
+            attempt: attempt > 1 ? attempt : undefined,
+          });
+
+          return; // Success!
+        } catch (error) {
+          lastError = error as Error;
+
+          // With unique temp files, cross-writer rename collisions are eliminated
+          // Log retry attempt
+          if (attempt < MAX_RETRIES) {
+            logger.warn('Failed to save migration job, retrying', {
+              jobId: job.id,
+              attempt,
+              maxRetries: MAX_RETRIES,
+              error: lastError.message,
+            });
+
+            // Clean up temp file before retry
+            try {
+              await fs.unlink(tempPath);
+            } catch {
+              // Ignore cleanup errors
+            }
+
+            // Wait before retry (exponential backoff: 100ms, 200ms, 400ms)
+            await new Promise(resolve => setTimeout(resolve, 100 * Math.pow(2, attempt - 1)));
+          }
         }
       }
-    }
 
-    // All retries failed
-    logger.error('Failed to save migration job after all retries', {
-      jobId: job.id,
-      attempts: MAX_RETRIES,
-      error: lastError,
+      // All retries failed
+      logger.error('Failed to save migration job after all retries', {
+        jobId: job.id,
+        attempts: MAX_RETRIES,
+        error: lastError,
+      });
+
+      // Clean up temp file
+      try {
+        await fs.unlink(tempPath);
+      } catch {
+        // Ignore cleanup errors
+      }
+
+      throw lastError || new Error('Failed to save migration job');
     });
-
-    // Clean up temp file
-    try {
-      await fs.unlink(tempPath);
-    } catch {
-      // Ignore cleanup errors
-    }
-
-    throw lastError || new Error('Failed to save migration job');
   }
 
   /**
@@ -302,100 +443,105 @@ export class MigrationStateStore {
    */
   async getMigrationJob(jobId: string): Promise<MigrationJob | null> {
     const jobPath = this.getJobPath(jobId);
+    const MAX_RETRIES = 5;
+    let lastError: Error | null = null;
 
-    try {
-      const content = await fs.readFile(jobPath, 'utf-8');
-      const job = JSON.parse(content) as MigrationJob;
-
-      // Convert date strings back to Date objects
-      job.startedAt = new Date(job.startedAt);
-      if (job.completedAt) {
-        job.completedAt = new Date(job.completedAt);
-      }
-      if (job.lastHeartbeat) {
-        job.lastHeartbeat = new Date(job.lastHeartbeat);
-      }
-      if (job.progress?.lastUpdate) {
-        job.progress.lastUpdate = new Date(job.progress.lastUpdate);
-      }
-      job.errors = job.errors.map(err => ({
-        ...err,
-        timestamp: new Date(err.timestamp),
-      }));
-      job.steps = job.steps.map(step => ({
-        ...step,
-        startedAt: step.startedAt ? new Date(step.startedAt) : undefined,
-        completedAt: step.completedAt ? new Date(step.completedAt) : undefined,
-      }));
-
-      // Convert nested date fields in progress object
-      if (job.progress) {
-        // Convert throughput.estimatedCompletionTime
-        if (job.progress.throughput?.estimatedCompletionTime) {
-          job.progress.throughput.estimatedCompletionTime = new Date(job.progress.throughput.estimatedCompletionTime);
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        // Wait for any pending writes to this job to complete
+        const pendingWrite = this.writeQueue.get(jobId);
+        if (pendingWrite) {
+          try {
+            await pendingWrite;
+          } catch {
+            // Continue even if write failed - we'll try to read anyway
+          }
         }
 
-        // Convert preRetrySnapshot.lastUpdate
-        if (job.progress.preRetrySnapshot?.lastUpdate) {
-          job.progress.preRetrySnapshot.lastUpdate = new Date(job.progress.preRetrySnapshot.lastUpdate);
+        const content = await fs.readFile(jobPath, 'utf-8');
+        const job = JSON.parse(content) as MigrationJob;
+
+        // Convert date strings back to Date objects using our helper
+        return this.deserializeJob(job);
+      } catch (error: unknown) {
+        lastError = error as Error;
+
+        // If file doesn't exist, return null immediately (no retry needed)
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          if (attempt === 1) {
+            logger.debug('Migration job not found', { jobId });
+          }
+          return null;
         }
 
-        // Convert batchCheckpoints dates
-        if (job.progress.batchCheckpoints) {
-          job.progress.batchCheckpoints = job.progress.batchCheckpoints.map(checkpoint => ({
-            ...checkpoint,
-            startedAt: new Date(checkpoint.startedAt),
-            completedAt: checkpoint.completedAt ? new Date(checkpoint.completedAt) : undefined,
-          }));
-        }
-
-        // Convert failedItems dates (deprecated but still present in some jobs)
-        if (job.progress.failedItems) {
-          job.progress.failedItems = job.progress.failedItems.map(item => ({
-            ...item,
-            firstAttemptAt: new Date(item.firstAttemptAt),
-            lastAttemptAt: new Date(item.lastAttemptAt),
-          }));
-        }
-      }
-
-      return job;
-    } catch (error: unknown) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        logger.warn('Migration job not found', { jobId });
-        return null;
-      }
-
-      // Handle JSON parse errors (corrupted files)
-      if (error instanceof SyntaxError && error.message.includes('JSON')) {
-        logger.error('Migration job file is corrupted (invalid JSON)', {
-          jobId,
-          filePath: jobPath,
-          error: error.message,
-        });
-
-        // Create a backup of the corrupted file
-        try {
-          const backupPath = `${jobPath}.corrupted.${Date.now()}`;
-          await fs.copyFile(jobPath, backupPath);
-          logger.warn('Created backup of corrupted migration file', {
+        // Handle JSON parse errors (corrupted files)
+        if (error instanceof SyntaxError) {
+          logger.error('JSON parse error - file may be corrupted', {
             jobId,
-            backupPath,
+            attempt,
+            maxRetries: MAX_RETRIES,
+            filePath: jobPath,
+            error: (error as Error).message,
           });
-        } catch (backupError) {
-          logger.error('Failed to create backup of corrupted file', {
-            jobId,
-            backupError,
-          });
+
+          // On first parse error, try to recover from backup
+          if (attempt === 1) {
+            // Create a backup of the corrupted file
+            try {
+              const corruptedBackupPath = `${jobPath}.corrupted.${Date.now()}`;
+              await fs.copyFile(jobPath, corruptedBackupPath);
+              logger.warn('Created backup of corrupted migration file', {
+                jobId,
+                backupPath: corruptedBackupPath,
+              });
+            } catch (backupError) {
+              logger.error('Failed to create backup of corrupted file', {
+                jobId,
+                backupError,
+              });
+            }
+
+            // Try to recover from our automatic backup
+            const recovered = await this.recoverFromBackup(jobId);
+            if (recovered) {
+              // Restore the recovered version to the main file
+              try {
+                await this.saveMigrationJob(recovered);
+                logger.info('Successfully recovered and restored corrupted job file', { jobId });
+                return recovered;
+              } catch (saveError) {
+                logger.error('Failed to restore recovered job', { jobId, error: saveError });
+              }
+            }
+          }
         }
 
-        // Return null to allow the system to continue gracefully
-        return null;
+        // Retry with exponential backoff (50ms, 100ms, 200ms, 400ms, 800ms)
+        if (attempt < MAX_RETRIES) {
+          const backoffMs = 50 * Math.pow(2, attempt - 1);
+          logger.warn('Failed to read migration job, retrying', {
+            jobId,
+            attempt,
+            maxRetries: MAX_RETRIES,
+            backoffMs,
+            errorType: error instanceof SyntaxError ? 'JSON parse error' : 'read error',
+            error: (error as Error).message,
+          });
+          await new Promise(resolve => setTimeout(resolve, backoffMs));
+        }
       }
-
-      logger.error('Failed to read migration job', { jobId, error });
-      throw error;
     }
+
+    // All retries failed
+    logger.error('Failed to get migration job after all retries', {
+      jobId,
+      attempts: MAX_RETRIES,
+      error: lastError,
+    });
+
+    // Return null to allow the system to continue gracefully
+    // The caller can decide how to handle the missing job
+    return null;
   }
 
   /**
