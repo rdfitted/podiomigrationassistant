@@ -227,7 +227,7 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
           remaining: info.remaining,
           limit: info.limit,
           resumeAt: info.resumeAt.toISOString(),
-          pauseStartTime: info.pauseStartTime,
+          pauseStartTime: info.pauseStartTime.toISOString(),
         });
       },
       onRateLimitResume: async (info) => {
