@@ -234,11 +234,14 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
         // Record the pause in throughput calculator
         throughputCalculator.recordRateLimitPause(info.pauseDurationMs);
 
+        // Get summary stats for logging
+        const stats = throughputCalculator.getSummaryStats();
+
         logger.info('Rate limit pause ended - tracking recorded', {
           jobId,
           pauseDurationMs: info.pauseDurationMs,
-          totalPauses: throughputCalculator.totalRateLimitPauses,
-          totalDelayMs: throughputCalculator.totalRateLimitDelay,
+          totalPauses: stats.totalRateLimitPauses,
+          totalDelayMs: stats.totalRateLimitDelay,
         });
 
         // Update throughput metrics to reflect the pause
