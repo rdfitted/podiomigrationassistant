@@ -85,6 +85,10 @@ export interface MigrationConfig {
   transferFiles?: boolean;
   /** Progress callback */
   onProgress?: (progress: { total: number; processed: number; successful: number; failed: number }) => void | Promise<void>;
+  /** Rate limit pause callback - called when migration pauses due to rate limits */
+  onRateLimitPause?: (info: { remaining: number; limit: number; resumeAt: Date; pauseStartTime: Date }) => void | Promise<void>;
+  /** Rate limit resume callback - called when migration resumes after rate limit pause */
+  onRateLimitResume?: (info: { pauseDurationMs: number }) => void | Promise<void>;
   /** Optional override for target prefetch timeout (ms). Default: 4 hours */
   prefetchTimeoutMs?: number;
   /** Optional override for prefetch health check interval (ms). Default: 5 minutes */
@@ -795,6 +799,57 @@ export class ItemMigrator {
           index,
           error,
         });
+      });
+
+      // Track rate limit pause timing
+      let rateLimitPauseStartTime: number | null = null;
+
+      // Set up rate limit pause tracking
+      processor.on('rateLimitPause', async (payload) => {
+        rateLimitPauseStartTime = Date.now();
+
+        migrationLogger.info('Rate limit pause detected', {
+          migrationId: migrationJob.id,
+          ...payload,
+        });
+
+        if (config.onRateLimitPause) {
+          try {
+            await config.onRateLimitPause({
+              ...payload,
+              pauseStartTime: new Date(rateLimitPauseStartTime),
+            });
+          } catch (e) {
+            migrationLogger.warn('onRateLimitPause callback failed; continuing', {
+              migrationId: migrationJob.id,
+              error: e instanceof Error ? e.message : String(e),
+            });
+          }
+        }
+      });
+
+      processor.on('rateLimitResume', async () => {
+        const pauseDurationMs = rateLimitPauseStartTime
+          ? Date.now() - rateLimitPauseStartTime
+          : 0;
+
+        rateLimitPauseStartTime = null;
+
+        migrationLogger.info('Rate limit pause ended', {
+          migrationId: migrationJob.id,
+          pauseDurationMs,
+        });
+
+        if (config.onRateLimitResume) {
+          try {
+            await config.onRateLimitResume({ pauseDurationMs });
+          } catch (e) {
+            migrationLogger.warn('onRateLimitResume callback failed; continuing', {
+              migrationId: migrationJob.id,
+              error: e instanceof Error ? e.message : String(e),
+            });
+          }
+        }
       });
 
       // Get match field info if provided

@@ -181,13 +181,13 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
           const itemsInBatch = progress.processed - lastProcessedCount;
 
           if (itemsInBatch > 0) {
-            // Complete the current batch
+            // Complete the current batch (rate limiting is tracked via callbacks below)
             throughputCalculator.completeBatch(
               batchNumber,
               batchStartTime,
               itemsInBatch,
-              false, // TODO: Track rate limiting from batch processor
-              0      // TODO: Track rate limit delay from batch processor
+              false, // Rate limiting tracked separately via onRateLimitPause/Resume
+              0      // Rate limit delay tracked separately via onRateLimitPause/Resume
             );
 
             // Calculate current throughput metrics
@@ -220,6 +220,33 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
         if (shouldPause) {
           throw new PauseRequested();
         }
+      },
+      onRateLimitPause: async (info) => {
+        logger.info('Rate limit pause started', {
+          jobId,
+          remaining: info.remaining,
+          limit: info.limit,
+          resumeAt: info.resumeAt.toISOString(),
+          pauseStartTime: info.pauseStartTime.toISOString(),
+        });
+      },
+      onRateLimitResume: async (info) => {
+        // Record the pause in throughput calculator
+        throughputCalculator.recordRateLimitPause(info.pauseDurationMs);
+
+        logger.info('Rate limit pause ended - tracking recorded', {
+          jobId,
+          pauseDurationMs: info.pauseDurationMs,
+          totalPauses: throughputCalculator.totalRateLimitPauses,
+          totalDelayMs: throughputCalculator.totalRateLimitDelay,
+        });
+
+        // Update throughput metrics to reflect the pause
+        const throughputMetrics = throughputCalculator.calculateMetrics(
+          result.processed,
+          result.processed
+        );
+        await migrationStateStore.updateThroughputMetrics(jobId, throughputMetrics);
       },
     });
 
