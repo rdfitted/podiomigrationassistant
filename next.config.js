@@ -1,9 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Enable instrumentation for server-side initialization
-  experimental: {
-    instrumentationHook: true,
-  },
+  // instrumentation.js is now available by default in Next.js 15
 };
 
 export default nextConfig;
