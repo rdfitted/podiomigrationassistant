@@ -120,6 +120,19 @@ export function CleanupPanel({ appId }: CleanupPanelProps) {
     setShowSourceFilters(false); // Collapse filters section on reset
   };
 
+  // Handle proceeding from dry run to actual execution
+  const handleProceed = () => {
+    // Set dry run to false
+    setDryRun(false);
+    // Reset the current job state
+    reset();
+    // Re-run with the same configuration but dryRun: false
+    // Use setTimeout to allow state to update before starting
+    setTimeout(() => {
+      handleStartCleanup();
+    }, 100);
+  };
+
   const canStart = !!(appId && matchField);
   const isRunning = isCreating || isPolling || isExecuting;
 
@@ -571,6 +584,7 @@ export function CleanupPanel({ appId }: CleanupPanelProps) {
           mode={mode}
           dryRun={dryRun}
           onApproveAndExecute={handleApproveAndExecute}
+          onProceed={handleProceed}
           isExecuting={isExecuting}
         />
       )}
