@@ -7,6 +7,7 @@ import { migrationStateStore } from '../state-store';
 import { ItemMigrator } from './item-migrator';
 import { updateMigrationProgress } from './service';
 import { logger } from '../logging';
+import { convertFilters } from './filter-converter';
 import {
   registerActiveMigration,
   unregisterActiveMigration,
@@ -149,6 +150,16 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
     let batchStartTime = Date.now();
     const PROGRESS_UPDATE_INTERVAL = 2000; // Update every 2 seconds
 
+    // Convert user-friendly filters to Podio API format
+    const podioFilters = convertFilters(metadata.filters);
+    if (Object.keys(podioFilters).length > 0) {
+      logger.info('Applying migration filters', {
+        jobId,
+        originalFilters: metadata.filters,
+        convertedFilters: podioFilters,
+      });
+    }
+
     // Execute migration with progress callback
     const result = await migrator.executeMigration({
       sourceAppId: metadata.sourceAppId,
@@ -161,7 +172,7 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
       batchSize: metadata.batchSize || 500,
       concurrency: metadata.concurrency || 5,
       stopOnError: metadata.stopOnError || false,
-      filters: metadata.filters,
+      filters: podioFilters,
       resumeToken: metadata.resumeToken,
       maxItems: metadata.maxItems,
       dryRun: metadata.dryRun, // Pass dry-run mode

@@ -10,6 +10,7 @@ import * as schemas from './schemas';
 import * as migration from '../podio/migration';
 import { PodioApiError } from '../podio/errors';
 import { getAppStructureCache } from '../migration/items/app-structure-cache';
+import { buildPodioItemFilters } from '../migration/items/filter-converter';
 import { z } from 'zod';
 
 // ============================================================================
@@ -35,6 +36,28 @@ function handleToolError(error: unknown, operation: string) {
       message: `Failed to ${operation}: ${error instanceof Error ? error.message : String(error)}`,
     },
   };
+}
+
+/**
+ * Build Podio API-compatible item filters for the Phase 5 tools.
+ * Accepts either Podio-native filter keys (passed through) and/or user-friendly date keys
+ * (`createdFrom`, `createdTo`, `lastEditFrom`, `lastEditTo`) which are converted.
+ */
+function buildItemFiltersForTool(input: {
+  filters?: Record<string, unknown>;
+  createdFrom?: string;
+  createdTo?: string;
+  lastEditFrom?: string;
+  lastEditTo?: string;
+}): Record<string, unknown> | undefined {
+  const podioFilters = buildPodioItemFilters(input.filters, {
+    createdFrom: input.createdFrom,
+    createdTo: input.createdTo,
+    lastEditFrom: input.lastEditFrom,
+    lastEditTo: input.lastEditTo,
+  });
+
+  return Object.keys(podioFilters).length > 0 ? podioFilters : undefined;
 }
 
 // ============================================================================
@@ -336,11 +359,19 @@ export const getMigrationStatus = tool({
  * Get item count for an app
  */
 export const getItemCount = tool({
-  description: 'Get the total number of items in a Podio app. Essential for planning large-scale data migrations. Returns total item count and filtered count (if filters applied). Use this before migrating 80,000+ items to estimate duration.',
+  description: 'Get the total number of items in a Podio app. Essential for planning large-scale data migrations. Returns total item count and filtered count (if filters applied). Use this before migrating 80,000+ items to estimate duration. Supports date filtering (createdFrom, createdTo, lastEditFrom, lastEditTo).',
   inputSchema: schemas.getItemCountInputSchema,
-  execute: async ({ appId, filters }) => {
+  execute: async ({ appId, filters, createdFrom, createdTo, lastEditFrom, lastEditTo }) => {
     try {
-      const result = await migration.getItemCountForApp(appId, filters);
+      const combinedFilters = buildItemFiltersForTool({
+        filters,
+        createdFrom,
+        createdTo,
+        lastEditFrom,
+        lastEditTo,
+      });
+
+      const result = await migration.getItemCountForApp(appId, combinedFilters);
       return {
         success: true,
         ...result,
@@ -355,7 +386,7 @@ export const getItemCount = tool({
  * Migrate items between apps
  */
 export const migrateItems = tool({
-  description: 'Migrate items from source app to target app with field mapping. Supports duplicate detection and field-based updates using separate sourceMatchField and targetMatchField parameters (allows matching across differently-named fields). Modes: create (with optional duplicate check), update (requires both match fields), upsert (update if exists, create if not). Optimized for large-scale migrations (80,000+ items) with batch processing, automatic retry, progress tracking, and checkpoint/resume capability. Returns migration ID, progress stats (processed/successful/failed), throughput (items/sec), and resume token for interrupted migrations.',
+  description: 'Migrate items from source app to target app with field mapping. Supports duplicate detection, field-based updates, and date filtering (createdFrom, createdTo, lastEditFrom, lastEditTo). Modes: create (with optional duplicate check), update (requires both match fields), upsert (update if exists, create if not). Optimized for large-scale migrations (80,000+ items) with batch processing, automatic retry, progress tracking, and checkpoint/resume capability. Returns migration ID, progress stats (processed/successful/failed), throughput (items/sec), and resume token for interrupted migrations.',
   inputSchema: schemas.migrateItemsInputSchema,
   execute: async ({
     sourceAppId,
@@ -369,9 +400,21 @@ export const migrateItems = tool({
     concurrency,
     stopOnError,
     filters,
+    createdFrom,
+    createdTo,
+    lastEditFrom,
+    lastEditTo,
     resumeToken,
   }) => {
     try {
+      const combinedFilters = buildItemFiltersForTool({
+        filters,
+        createdFrom,
+        createdTo,
+        lastEditFrom,
+        lastEditTo,
+      });
+
       const result = await migration.migrateItemsBetweenApps({
         sourceAppId,
         targetAppId,
@@ -383,7 +426,7 @@ export const migrateItems = tool({
         batchSize,
         concurrency,
         stopOnError,
-        filters,
+        filters: combinedFilters,
         resumeToken,
       });
       return {
@@ -400,15 +443,23 @@ export const migrateItems = tool({
  * Export items to JSON file
  */
 export const exportItems = tool({
-  description: 'Export items from a Podio app to a JSON file for backup or offline migration. Supports streaming for large datasets and optional filters. Returns file path and total items exported. Use ndjson format for very large exports (80,000+ items).',
+  description: 'Export items from a Podio app to a JSON file. Supports streaming, ndjson format, and date filtering (createdFrom, createdTo, lastEditFrom, lastEditTo). Returns file path and total items exported. Use ndjson for 80,000+ items.',
   inputSchema: schemas.exportItemsInputSchema,
-  execute: async ({ appId, outputPath, filters, format, batchSize }) => {
+  execute: async ({ appId, outputPath, filters, createdFrom, createdTo, lastEditFrom, lastEditTo, format, batchSize }) => {
     try {
+      const combinedFilters = buildItemFiltersForTool({
+        filters,
+        createdFrom,
+        createdTo,
+        lastEditFrom,
+        lastEditTo,
+      });
+
       const result = await migration.exportAppItems(
         appId,
         outputPath,
         {
-          filters,
+          filters: combinedFilters,
           format,
           batchSize,
         }

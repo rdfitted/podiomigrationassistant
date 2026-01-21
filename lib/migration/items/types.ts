@@ -24,13 +24,83 @@ export interface FailedItemRecord {
 export type FieldMapping = Record<string, string>;
 
 /**
- * Item migration filters
+ * Item migration filters for date-based and tag-based filtering
+ *
+ * These filters allow restricting which items are included in a migration
+ * based on creation date, last edit date, or tags.
+ *
+ * Date formats accepted (ISO 8601):
+ * - Date only: `YYYY-MM-DD` (e.g., "2025-01-15")
+ * - Date and time (space): `YYYY-MM-DD HH:mm:ss` (e.g., "2025-01-15 09:30:00")
+ * - Full ISO with T: `YYYY-MM-DDTHH:mm:ss` (e.g., "2025-01-15T09:30:00")
+ * - Full ISO with timezone: `YYYY-MM-DDTHH:mm:ssZ` or `YYYY-MM-DDTHH:mm:ss+00:00`
+ *
+ * @example
+ * ```typescript
+ * // Filter items created in 2025
+ * const filters: ItemMigrationFilters = {
+ *   createdFrom: '2025-01-01',
+ *   createdTo: '2025-12-31',
+ * };
+ * ```
+ *
+ * @example
+ * ```typescript
+ * // Filter items modified after a specific date
+ * const filters: ItemMigrationFilters = {
+ *   lastEditFrom: '2025-06-01',
+ * };
+ * ```
+ *
+ * @example
+ * ```typescript
+ * // Filter items by tags
+ * const filters: ItemMigrationFilters = {
+ *   tags: ['urgent', 'client-project'],
+ * };
+ * ```
+ *
+ * @example
+ * ```typescript
+ * // Combined filters (all conditions must be met)
+ * const filters: ItemMigrationFilters = {
+ *   createdFrom: '2025-01-01',
+ *   lastEditTo: '2025-06-30',
+ *   tags: ['active'],
+ * };
+ * ```
  */
 export interface ItemMigrationFilters {
+  /**
+   * Filter items created on or after this date (inclusive)
+   * Format: ISO 8601 (e.g., "2025-01-01", "2025-01-01 09:30:00", or "2025-01-01T09:30:00Z")
+   */
   createdFrom?: string;
+
+  /**
+   * Filter items created on or before this date (inclusive)
+   * Format: ISO 8601 (e.g., "2025-01-01", "2025-01-01 09:30:00", or "2025-01-01T09:30:00Z")
+   */
   createdTo?: string;
+
+  /**
+   * Filter items last edited on or after this date (inclusive)
+   * Maps to Podio's `last_event_on` filter
+   * Format: ISO 8601 (e.g., "2025-01-01", "2025-01-01 09:30:00", or "2025-01-01T09:30:00Z")
+   */
   lastEditFrom?: string;
+
+  /**
+   * Filter items last edited on or before this date (inclusive)
+   * Maps to Podio's `last_event_on` filter
+   * Format: ISO 8601 (e.g., "2025-01-01", "2025-01-01 09:30:00", or "2025-01-01T09:30:00Z")
+   */
   lastEditTo?: string;
+
+  /**
+   * Filter items that have all specified tags
+   * Tags are case-sensitive
+   */
   tags?: string[];
 }
 
