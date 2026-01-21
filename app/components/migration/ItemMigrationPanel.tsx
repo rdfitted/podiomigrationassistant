@@ -130,13 +130,19 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
   const currentMapping = fieldMappingOverride || fieldMapping;
   const isUsingCustomMapping = !!fieldMappingOverride;
 
-  // Sync original field mapping from job status
+  // Sync original field mapping from job status, reset when job changes
   useEffect(() => {
     if (jobStatus?.fieldMapping && !originalFieldMapping) {
       setOriginalFieldMapping(jobStatus.fieldMapping);
       setRetryFieldMapping(jobStatus.fieldMapping);
     }
   }, [jobStatus?.fieldMapping, originalFieldMapping]);
+
+  // Clear retry mappings when active job changes to prevent stale mappings
+  useEffect(() => {
+    setOriginalFieldMapping(null);
+    setRetryFieldMapping(null);
+  }, [jobId]);
 
   const mappingDiff = useMemo(
     () => calculateFieldMappingDiff(originalFieldMapping, retryFieldMapping),
