@@ -604,34 +604,11 @@ export interface StreamItemsOptions {
  * Stream items from an app using async generator
  * Memory-efficient iteration for large datasets (80,000+ items)
  *
- * **IMPORTANT: Podio API has a 20,000 item offset limit**
- *
- * The Podio filter API silently stops returning results or may return incomplete
- * data when the offset exceeds ~20,000. This is an undocumented API limitation.
- *
- * For apps with >20,000 items, use one of these workarounds:
- * 1. **Date-based pagination**: Use `created_on` or `last_event_on` filters to
- *    page through data in time-based chunks (recommended for large datasets)
- * 2. **Category/status filtering**: If your app has a status field, filter by
- *    status values to reduce result sets below 20K each
- * 3. **Multiple filter passes**: Run multiple filtered queries with non-overlapping
- *    criteria to cover all items
- *
  * @example
- * // Basic usage (works for apps with <20K items)
  * for await (const batch of streamItems(client, appId, { batchSize: 500 })) {
  *   for (const item of batch) {
  *     // Process each item
  *   }
- * }
- *
- * @example
- * // For >20K items, use date-based filtering
- * for await (const batch of streamItems(client, appId, {
- *   batchSize: 500,
- *   filters: { created_on: { from: '2024-01-01', to: '2024-06-30' } }
- * })) {
- *   // Process items from first half of 2024
  * }
  */
 export async function* streamItems(
@@ -650,31 +627,10 @@ export async function* streamItems(
   let offset = startOffset;
   let hasMore = true;
   let totalFetched = 0;
-  let warnedAboutOffsetLimit = false;
-
-  // Podio API offset limit - results may be incomplete beyond this point
-  const PODIO_OFFSET_LIMIT = 20000;
 
   logger.info('Starting item stream', { appId, batchSize, startOffset });
 
   while (hasMore) {
-    // Check if we've exceeded Podio's offset limit
-    if (offset >= PODIO_OFFSET_LIMIT) {
-      const error = new Error(
-        `Podio API offset limit of 20,000 items exceeded. ` +
-        `The API does not reliably return items beyond offset 20,000. ` +
-        `Use date-based filtering (created_on or last_event_on) or other filters ` +
-        `to process items in smaller chunks.`
-      );
-      logger.error('Offset limit exceeded', {
-        appId,
-        offset,
-        offsetLimit: PODIO_OFFSET_LIMIT,
-        recommendation: 'Use date-based filtering to paginate through items in chunks',
-      });
-      throw error;
-    }
-
     try {
       const response = await withRetry(
         () => filterItems(client, appId, {
@@ -687,17 +643,6 @@ export async function* streamItems(
         createRetryConfig({ maxAttempts: 3 }),
         { method: 'POST', url: `/item/app/${appId}/filter/` }
       );
-
-      // Warn once if total items exceed the offset limit
-      if (!warnedAboutOffsetLimit && response.filtered > PODIO_OFFSET_LIMIT) {
-        logger.warn('App has more items than Podio offset limit allows', {
-          appId,
-          totalItems: response.filtered,
-          offsetLimit: PODIO_OFFSET_LIMIT,
-          recommendation: 'Use date-based filtering (created_on or last_event_on) to paginate through items in chunks',
-        });
-        warnedAboutOffsetLimit = true;
-      }
 
       if (response.items.length > 0) {
         yield response.items;
