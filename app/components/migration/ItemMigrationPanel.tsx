@@ -1180,9 +1180,9 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
                       <button
                         onClick={async () => {
                           if (window.confirm('Are you sure you want to retry failed items with modified field mapping?')) {
-                            await retryFailedItems(jobId, retryFieldMapping || undefined);
-                            // Only clear UI state if retry was successful (no error)
-                            if (!error) {
+                            const success = await retryFailedItems(jobId, retryFieldMapping || undefined);
+                            // Only clear UI state if retry was successful
+                            if (success) {
                               setShowRetryFieldMapping(false);
                               // Reset field mapping state so the updated mapping becomes the new "original"
                               // for any future retry attempts (the new mapping will be loaded from job status)
