@@ -68,12 +68,12 @@ export function useRateLimitStatus(options: UseRateLimitStatusOptions = {}) {
     if (!mountedRef.current) return;
 
     // Abort any previous in-flight request
-    abortControllerRef.current?.abort('New request started');
+    abortControllerRef.current?.abort(new DOMException('New request started', 'AbortError'));
     abortControllerRef.current = new AbortController();
 
     // Set up timeout to abort request after 30 seconds (increased for heavy loads)
     const timeoutId = setTimeout(() => {
-      abortControllerRef.current?.abort('Request timeout');
+      abortControllerRef.current?.abort(new DOMException('Request timeout', 'AbortError'));
     }, 30_000);
 
     try {
@@ -126,9 +126,10 @@ export function useRateLimitStatus(options: UseRateLimitStatusOptions = {}) {
       if (err instanceof Error && (
         err.name === 'AbortError' ||
         err.message === 'Request timeout' ||
+        err.message === 'New request started' ||
         err.message?.includes('aborted')
       )) {
-        // Silent retry for timeouts - don't count as errors
+        // Silent - don't count as errors, will retry on next poll
         return;
       }
 
@@ -240,7 +241,7 @@ export function useRateLimitStatus(options: UseRateLimitStatusOptions = {}) {
         clearTimeout(timeoutRef.current);
       }
       // Abort any in-flight request on unmount
-      abortControllerRef.current?.abort('Component unmounted');
+      abortControllerRef.current?.abort(new DOMException('Component unmounted', 'AbortError'));
       scheduleNextRef.current = null;
     };
   }, [enabled, pollInterval, adaptivePolling, hasActiveJobs, fetchStatus]);

@@ -62,7 +62,7 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current);
       }
-      abortControllerRef.current?.abort('Component unmounted');
+      abortControllerRef.current?.abort(new DOMException('Component unmounted', 'AbortError'));
     };
   }, []);
 
@@ -177,70 +177,77 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
 
     try {
       // Abort previous request if still in flight
-      abortControllerRef.current?.abort('New poll request started');
+      abortControllerRef.current?.abort(new DOMException('New poll request started', 'AbortError'));
       abortControllerRef.current = new AbortController();
 
       // Set up timeout to abort request after 30 seconds
       const timeoutId = setTimeout(() => {
-        abortControllerRef.current?.abort('Poll timeout');
+        abortControllerRef.current?.abort(new DOMException('Poll timeout', 'AbortError'));
       }, 30_000);
 
-      const response = await fetch(`/api/migration/cleanup/${currentJobId}`, {
-        signal: abortControllerRef.current.signal,
-      });
-      clearTimeout(timeoutId);
+      try {
+        const response = await fetch(`/api/migration/cleanup/${currentJobId}`, {
+          signal: abortControllerRef.current.signal,
+        });
+        clearTimeout(timeoutId);
 
-      if (!response.ok) {
+        if (!response.ok) {
+          if (!mountedRef.current) return;
+
+          if (response.status === 404) {
+            setError('Job not found');
+            setIsPolling(false);
+            return;
+          }
+          throw new Error('Failed to fetch job status');
+        }
+
+        const data: CleanupStatusResponse = await response.json();
+
         if (!mountedRef.current) return;
 
-        if (response.status === 404) {
-          setError('Job not found');
-          setIsPolling(false);
-          return;
+        setJobStatus(data);
+
+        // Update duplicate groups if available
+        if (data.duplicateGroups) {
+          setDuplicateGroups(data.duplicateGroups);
         }
-        throw new Error('Failed to fetch job status');
-      }
 
-      const data: CleanupStatusResponse = await response.json();
+        // Update global context with progress
+        if (data.progress) {
+          updateJobProgress('cleanup', {
+            total: data.progress.totalItemsToDelete ?? 0,
+            processed: data.progress.processedGroups ?? 0,
+            successful: data.progress.deletedItems ?? 0,
+            failed: data.progress.failedDeletions ?? 0,
+            percent: data.progress.percent ?? 0
+          });
+        }
 
-      if (!mountedRef.current) return;
+        // Update global context with status
+        updateJobStatus('cleanup', data.status as MigrationJobStatus);
 
-      setJobStatus(data);
-
-      // Update duplicate groups if available
-      if (data.duplicateGroups) {
-        setDuplicateGroups(data.duplicateGroups);
-      }
-
-      // Update global context with progress
-      if (data.progress) {
-        updateJobProgress('cleanup', {
-          total: data.progress.totalItemsToDelete ?? 0,
-          processed: data.progress.processedGroups ?? 0,
-          successful: data.progress.deletedItems ?? 0,
-          failed: data.progress.failedDeletions ?? 0,
-          percent: data.progress.percent ?? 0
-        });
-      }
-
-      // Update global context with status
-      updateJobStatus('cleanup', data.status as MigrationJobStatus);
-
-      // Stop polling if job is completed, failed, cancelled, paused, or waiting for approval
-      if (
-        data.status === 'completed' ||
-        data.status === 'failed' ||
-        data.status === 'cancelled' ||
-        data.status === 'paused' ||
-        data.status === 'waiting_approval'
-      ) {
-        setIsPolling(false);
+        // Stop polling if job is completed, failed, cancelled, paused, or waiting for approval
+        if (
+          data.status === 'completed' ||
+          data.status === 'failed' ||
+          data.status === 'cancelled' ||
+          data.status === 'paused' ||
+          data.status === 'waiting_approval'
+        ) {
+          setIsPolling(false);
+        }
+      } catch (innerErr) {
+        // Clear timeout on error path to prevent memory leak
+        clearTimeout(timeoutId);
+        throw innerErr;
       }
     } catch (err) {
       // Ignore abort errors (including timeouts - will retry on next poll)
       if (err instanceof Error && (
         err.name === 'AbortError' ||
         err.message === 'Poll timeout' ||
+        err.message === 'New poll request started' ||
         err.message?.includes('aborted')
       )) {
         // Don't stop polling on timeouts - just let the next interval try again
@@ -276,7 +283,7 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
           pollIntervalRef.current = null;
         }
         // Abort any in-flight request
-        abortControllerRef.current?.abort('Polling effect cleanup');
+        abortControllerRef.current?.abort(new DOMException('Polling effect cleanup', 'AbortError'));
       };
     }
   }, [jobId, isPolling, pollInterval, pollJobStatus]);
@@ -293,7 +300,7 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
       pollIntervalRef.current = null;
     }
     // Abort any in-flight request
-    abortControllerRef.current?.abort('Polling stopped manually');
+    abortControllerRef.current?.abort(new DOMException('Polling stopped manually', 'AbortError'));
     abortControllerRef.current = null;
   }, []);
 
