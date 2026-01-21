@@ -6,6 +6,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { itemMigrator } from '@/lib/migration/items/item-migrator';
+import { FIELD_ID_PATTERN } from '@/lib/migration/items/field-mapping';
 
 export const runtime = 'nodejs';
 
@@ -13,10 +14,15 @@ export const runtime = 'nodejs';
 const ValidationRequestSchema = z.object({
   sourceAppId: z.coerce.number().int().positive('Source app ID must be a positive integer'),
   targetAppId: z.coerce.number().int().positive('Target app ID must be a positive integer'),
-  fieldMapping: z.record(z.string(), z.string()).refine(
-    (mapping) => Object.keys(mapping).length > 0,
-    'Field mapping must contain at least one field'
-  ),
+  fieldMapping: z
+    .record(
+      z.string().regex(FIELD_ID_PATTERN, 'Field ID must be a numeric string (max 15 digits)'),
+      z.string().regex(FIELD_ID_PATTERN, 'Field ID must be a numeric string (max 15 digits)')
+    )
+    .refine(
+      (mapping) => Object.keys(mapping).length > 0,
+      'Field mapping must contain at least one field'
+    ),
 });
 
 /**

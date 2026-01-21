@@ -4,48 +4,19 @@
  */
 
 import { migrationStateStore, MigrationProgress } from '../state-store';
-import { ItemMigrationRequestPayload, ItemMigrationStatusResponse, ItemMigrationResult, FieldMapping } from './types';
+import { ItemMigrationRequestPayload, ItemMigrationStatusResponse, FieldMapping } from './types';
 import { getAppStructureDetailed } from '../../podio/migration';
 import { logger } from '../logging';
 import { isJobActive } from '../job-lifecycle';
 import { failureLogger } from './failure-logger';
 import { maskPII } from '../utils/pii-masking';
 import { validateFilters } from './filter-validator';
-import { isReadOnlyTargetFieldType } from './field-mapping';
-
-/**
- * Field types that are valid for matching
- * These produce simple, comparable values (text, numbers, booleans)
- */
-const VALID_MATCH_FIELD_TYPES = [
-  'text',        // Text fields - direct string comparison
-  'number',      // Number fields - numeric values
-  'calculation', // Calculated fields - extracted computed value
-  'email',       // Email fields - email addresses
-  'phone',       // Phone fields - phone numbers
-  'tel',         // Telephone fields - phone numbers (legacy)
-  'duration',    // Duration fields - time values
-  'money',       // Money fields - monetary values (just the number)
-  'location',    // Location fields - address text
-  'question',    // Question fields - yes/no boolean
-];
-
-/**
- * Field types that should NOT be used for matching
- * These produce IDs or complex objects that aren't portable
- */
-const INVALID_MATCH_FIELD_TYPES = [
-  'app',         // App relationship fields - item IDs (meaningless across apps)
-  'category',    // Category fields - internal category IDs (not portable)
-  'contact',     // Contact fields - profile/user IDs (not portable)
-  'date',        // Date fields - complex objects {start, end}
-  'image',       // Image fields - file IDs
-  'file',        // File fields - file IDs
-  'embed',       // Embed fields - URLs/embeds
-  'created_on',  // System field - creation timestamp
-  'created_by',  // System field - creator
-  'created_via', // System field - creation method
-];
+import {
+  isReadOnlyTargetFieldType,
+  VALID_MATCH_FIELD_TYPES,
+  INVALID_MATCH_FIELD_TYPES,
+  isInvalidMatchFieldType
+} from './field-mapping';
 
 /**
  * Validate that a field type is suitable for matching
@@ -60,7 +31,7 @@ function validateMatchFieldType(
   fieldLabel: string,
   fieldRole: 'source' | 'target'
 ): void {
-  if (INVALID_MATCH_FIELD_TYPES.includes(fieldType)) {
+  if ((INVALID_MATCH_FIELD_TYPES as readonly string[]).includes(fieldType)) {
     throw new Error(
       `Invalid ${fieldRole} match field type: "${fieldLabel}" is a ${fieldType} field. ` +
       `${fieldType.charAt(0).toUpperCase() + fieldType.slice(1)} fields cannot be used for matching because ` +
@@ -69,7 +40,7 @@ function validateMatchFieldType(
     );
   }
 
-  if (!VALID_MATCH_FIELD_TYPES.includes(fieldType)) {
+  if (!(VALID_MATCH_FIELD_TYPES as readonly string[]).includes(fieldType)) {
     logger.debug(`Uncommon match field type: ${fieldType}`, {
       fieldLabel,
       fieldRole,
@@ -569,7 +540,7 @@ export async function buildDefaultFieldMapping(
     // Second pass: match by label for unmapped fields
     // Allow cross-type matching if both types are valid for matching
     const isCompatibleType = (type: string) =>
-      VALID_MATCH_FIELD_TYPES.includes(type) &&
+      (VALID_MATCH_FIELD_TYPES as readonly string[]).includes(type) &&
       !skipAutoMatchFieldTypes.includes(type);
 
     for (const sourceField of sourceApp.fields || []) {

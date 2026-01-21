@@ -1163,7 +1163,7 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
                         </div>
                         <div className="ml-2">
                           <p className="text-xs text-yellow-700 dark:text-yellow-300">
-                            <strong>Note:</strong> Successfully migrated items ({jobStatus.progress.successful}) will not be re-processed with new mapping. Only failed items will be retried.
+                            <strong>Note:</strong> Successfully migrated items ({jobStatus.progress?.successful || 0}) will not be re-processed with new mapping. Only failed items will be retried.
                           </p>
                         </div>
                       </div>
@@ -1181,12 +1181,15 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
                         onClick={async () => {
                           if (window.confirm('Are you sure you want to retry failed items with modified field mapping?')) {
                             await retryFailedItems(jobId, retryFieldMapping || undefined);
-                            // Clear retry field mapping UI state after successful submission
-                            setShowRetryFieldMapping(false);
-                            // Reset field mapping state so the updated mapping becomes the new "original"
-                            // for any future retry attempts (the new mapping will be loaded from job status)
-                            setOriginalFieldMapping(null);
-                            setRetryFieldMapping(null);
+                            // Only clear UI state if retry was successful (no error)
+                            if (!error) {
+                              setShowRetryFieldMapping(false);
+                              // Reset field mapping state so the updated mapping becomes the new "original"
+                              // for any future retry attempts (the new mapping will be loaded from job status)
+                              setOriginalFieldMapping(null);
+                              setRetryFieldMapping(null);
+                            }
+                            // If error occurred, preserve retryFieldMapping so user can fix and retry
                           }
                         }}
                         disabled={isRetrying}

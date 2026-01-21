@@ -12,6 +12,7 @@ import { failureLogger } from '@/lib/migration/items/failure-logger';
 import { logger } from '@/lib/migration/logging';
 import { validateFieldMappingForRetry } from '@/lib/migration/items/service';
 import { getAppStructureCache } from '@/lib/migration/items/app-structure-cache';
+import { isValidFieldId } from '@/lib/migration/items/field-mapping';
 
 export const runtime = 'nodejs';
 
@@ -29,18 +30,6 @@ interface RetryMigrationMetadata {
   [key: string]: unknown;
 }
 
-/**
- * Regex pattern for valid Podio field IDs
- * Field IDs are numeric strings (e.g., "12345678")
- */
-const FIELD_ID_PATTERN = /^\d{1,15}$/;
-
-/**
- * Validates that a field ID matches the expected format
- */
-function isValidFieldId(fieldId: string): boolean {
-  return FIELD_ID_PATTERN.test(fieldId);
-}
 
 /**
  * Zod schema for retry request body
