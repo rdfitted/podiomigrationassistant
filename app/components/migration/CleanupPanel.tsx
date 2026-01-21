@@ -120,6 +120,23 @@ export function CleanupPanel({ appId }: CleanupPanelProps) {
     setShowSourceFilters(false); // Collapse filters section on reset
   };
 
+  // Handle proceeding from dry run to actual execution
+  // Uses existing detected groups instead of re-scanning
+  const handleProceed = async () => {
+    if (!duplicateGroups || duplicateGroups.length === 0) return;
+
+    // Update UI state
+    setDryRun(false);
+
+    // Execute with the already-detected groups (no re-scanning)
+    const approvedGroups = duplicateGroups.map(group => ({
+      ...group,
+      approved: true,
+    }));
+
+    await executeApprovedGroups(approvedGroups);
+  };
+
   const canStart = !!(appId && matchField);
   const isRunning = isCreating || isPolling || isExecuting;
 
@@ -571,6 +588,7 @@ export function CleanupPanel({ appId }: CleanupPanelProps) {
           mode={mode}
           dryRun={dryRun}
           onApproveAndExecute={handleApproveAndExecute}
+          onProceed={handleProceed}
           isExecuting={isExecuting}
         />
       )}

@@ -13,6 +13,7 @@ export interface DuplicateGroupsPreviewProps {
   mode: CleanupMode;
   dryRun: boolean;
   onApproveAndExecute?: (approvedGroups: DuplicateGroup[]) => void;
+  onProceed?: () => void; // Proceed after dry run (execute without re-scanning)
   isExecuting?: boolean;
 }
 
@@ -21,6 +22,7 @@ export function DuplicateGroupsPreview({
   mode,
   dryRun,
   onApproveAndExecute,
+  onProceed,
   isExecuting = false,
 }: DuplicateGroupsPreviewProps) {
   const [expandedGroups, setExpandedGroups] = useState<Set<number>>(new Set());
@@ -280,12 +282,36 @@ export function DuplicateGroupsPreview({
               </svg>
               <div className="ml-3">
                 <p className="text-sm text-blue-700 dark:text-blue-300">
-                  This is a dry run preview. No items will be deleted. To execute the cleanup,
-                  start a new cleanup with &quot;Dry Run&quot; disabled.
+                  Dry run complete - no items have been deleted yet.
                 </p>
               </div>
             </div>
           </div>
+
+          {/* Proceed Button */}
+          {onProceed && totalDuplicates > 0 && (
+            <div className="mt-4">
+              <button
+                onClick={onProceed}
+                disabled={isExecuting}
+                className={`
+                  w-full px-4 py-2 rounded-md font-medium text-white
+                  ${
+                    !isExecuting
+                      ? 'bg-red-600 hover:bg-red-700'
+                      : 'bg-gray-400 cursor-not-allowed'
+                  }
+                `}
+              >
+                {isExecuting
+                  ? 'Deleting...'
+                  : `Proceed with Deletion (${totalDuplicates} item${totalDuplicates !== 1 ? 's' : ''})`}
+              </button>
+              <p className="mt-2 text-xs text-gray-500 dark:text-gray-400 text-center">
+                This will delete the duplicates shown above. This action cannot be undone.
+              </p>
+            </div>
+          )}
         </div>
       )}
     </div>
