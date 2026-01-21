@@ -16,6 +16,7 @@ import {
   CleanupMode,
   KeepStrategy,
 } from './types';
+import { ItemMigrationFilters } from '../items/types';
 import { detectDuplicateGroups, applyKeepStrategy } from './service';
 
 /**
@@ -31,6 +32,7 @@ export interface CleanupExecutorConfig {
   dryRun: boolean;
   maxGroups?: number;
   approvedGroups?: DuplicateGroup[];
+  filters?: ItemMigrationFilters;
 }
 
 /**
@@ -121,6 +123,7 @@ export class CleanupExecutor extends EventEmitter {
         {
           jobId: this.jobId,
           onPauseCheck: () => this.pauseRequested,
+          filters: this.config.filters,
         }
       );
 
@@ -437,6 +440,7 @@ export async function executeCleanup(
     dryRun: request.dryRun || false,
     maxGroups: request.maxGroups,
     approvedGroups: request.approvedGroups,
+    filters: request.filters,
   });
 
   // Register executor for pause support

@@ -3,6 +3,8 @@
  * Defines data models for duplicate cleanup jobs, detection, and deletion
  */
 
+import { ItemMigrationFilters } from '../items/types';
+
 /**
  * Cleanup mode determines how duplicates are handled
  */
@@ -49,6 +51,7 @@ export interface CleanupRequestPayload {
   batchSize?: number; // Items to delete per batch (default: 100)
   concurrency?: number; // Parallel deletion batches (default: 3)
   approvedGroups?: DuplicateGroup[]; // For manual mode: user-approved groups to delete
+  filters?: ItemMigrationFilters; // Optional source item filters (date ranges, tags)
 }
 
 /**
@@ -61,6 +64,7 @@ export interface CleanupJobMetadata {
   keepStrategy: KeepStrategy;
   batchSize: number;
   concurrency: number;
+  filters?: ItemMigrationFilters;
 }
 
 /**

@@ -77,6 +77,12 @@ export async function POST(request: NextRequest) {
     // Parse request body
     const body = (await request.json()) as CleanupRequestPayload;
 
+    // Normalize filters - ensure backwards compatibility with clients that don't send filters
+    // Convert empty objects or undefined to undefined for consistent handling
+    const normalizedFilters = body.filters && Object.keys(body.filters).length > 0
+      ? body.filters
+      : undefined;
+
     console.log('📥 Cleanup API - Request received:', {
       appId: body.appId,
       matchField: body.matchField,
@@ -84,7 +90,11 @@ export async function POST(request: NextRequest) {
       keepStrategy: body.keepStrategy,
       dryRun: body.dryRun,
       maxGroups: body.maxGroups,
+      filters: normalizedFilters,
     });
+
+    // Update body with normalized filters
+    body.filters = normalizedFilters;
 
     // Validate required fields
     if (!body.appId || !body.matchField) {

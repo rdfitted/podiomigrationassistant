@@ -24,6 +24,14 @@ export function CleanupPanel({ appId }: CleanupPanelProps) {
   const [concurrency, setConcurrency] = useState<number>(3);
   const [maxGroups, setMaxGroups] = useState<number | undefined>(undefined);
 
+  // Source filters state
+  const [showSourceFilters, setShowSourceFilters] = useState(false);
+  const [createdFrom, setCreatedFrom] = useState<string>('');
+  const [createdTo, setCreatedTo] = useState<string>('');
+  const [lastEditFrom, setLastEditFrom] = useState<string>('');
+  const [lastEditTo, setLastEditTo] = useState<string>('');
+  const [tagsInput, setTagsInput] = useState<string>(''); // Comma-separated tags
+
   // UI state
   const [appFields, setAppFields] = useState<AppFieldInfo[]>([]);
   const [isLoadingFields, setIsLoadingFields] = useState(false);
@@ -69,6 +77,22 @@ export function CleanupPanel({ appId }: CleanupPanelProps) {
   }, [appId]);
 
   const handleStartCleanup = async () => {
+    // Build source filters if any are set
+    const parsedTags = tagsInput
+      .split(',')
+      .map(tag => tag.trim())
+      .filter(tag => tag.length > 0);
+
+    const filters = (createdFrom || createdTo || lastEditFrom || lastEditTo || parsedTags.length > 0)
+      ? {
+          ...(createdFrom && { createdFrom }),
+          ...(createdTo && { createdTo }),
+          ...(lastEditFrom && { lastEditFrom }),
+          ...(lastEditTo && { lastEditTo }),
+          ...(parsedTags.length > 0 && { tags: parsedTags }),
+        }
+      : undefined;
+
     await startCleanup({
       matchField,
       mode,
@@ -77,6 +101,7 @@ export function CleanupPanel({ appId }: CleanupPanelProps) {
       batchSize,
       concurrency,
       maxGroups,
+      filters,
     });
   };
 
@@ -87,10 +112,25 @@ export function CleanupPanel({ appId }: CleanupPanelProps) {
   const handleReset = () => {
     reset();
     setDryRun(true);
+    setCreatedFrom('');
+    setCreatedTo('');
+    setLastEditFrom('');
+    setLastEditTo('');
+    setTagsInput('');
+    setShowSourceFilters(false); // Collapse filters section on reset
   };
 
   const canStart = !!(appId && matchField);
   const isRunning = isCreating || isPolling || isExecuting;
+
+  // Check if any source filters are active (for badge display)
+  const hasActiveFilters = !!(
+    createdFrom ||
+    createdTo ||
+    lastEditFrom ||
+    lastEditTo ||
+    (tagsInput && tagsInput.trim().split(',').some(tag => tag.trim().length > 0))
+  );
   const showDuplicateGroups =
     jobStatus &&
     duplicateGroups &&
@@ -159,6 +199,136 @@ export function CleanupPanel({ appId }: CleanupPanelProps) {
             <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
               Items with the same value in this field will be considered duplicates
             </p>
+          </div>
+
+          {/* Source Filters Section */}
+          <div className="border border-gray-200 dark:border-gray-700 rounded-md">
+            <button
+              onClick={() => setShowSourceFilters(!showSourceFilters)}
+              className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-gray-50 dark:hover:bg-gray-800 rounded-t-md"
+              type="button"
+            >
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  Source Filters
+                </span>
+                {hasActiveFilters && (
+                  <span className="text-xs bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 px-2 py-0.5 rounded">
+                    Active
+                  </span>
+                )}
+              </div>
+              <svg
+                className={`w-5 h-5 transition-transform ${showSourceFilters ? 'rotate-180' : ''}`}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+
+            {showSourceFilters && (
+              <div className="px-4 py-3 border-t border-gray-200 dark:border-gray-700 space-y-4">
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  Filter items by creation date, last edit date, or tags. Only matching items will be considered for duplicate detection.
+                </p>
+
+                {/* Created Date Range */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Created Date Range
+                  </label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">From</label>
+                      <input
+                        type="date"
+                        value={createdFrom}
+                        onChange={(e) => setCreatedFrom(e.target.value)}
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm"
+                        disabled={isRunning}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">To</label>
+                      <input
+                        type="date"
+                        value={createdTo}
+                        onChange={(e) => setCreatedTo(e.target.value)}
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm"
+                        disabled={isRunning}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Last Edited Date Range */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Last Edited Date Range
+                  </label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">From</label>
+                      <input
+                        type="date"
+                        value={lastEditFrom}
+                        onChange={(e) => setLastEditFrom(e.target.value)}
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm"
+                        disabled={isRunning}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">To</label>
+                      <input
+                        type="date"
+                        value={lastEditTo}
+                        onChange={(e) => setLastEditTo(e.target.value)}
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm"
+                        disabled={isRunning}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Tags Filter */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Tags Filter
+                  </label>
+                  <input
+                    type="text"
+                    value={tagsInput}
+                    onChange={(e) => setTagsInput(e.target.value)}
+                    placeholder="Enter tags separated by commas (e.g., urgent, active)"
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm"
+                    disabled={isRunning}
+                  />
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    Only items with ALL specified tags will be included. Tags are case-sensitive (e.g., &quot;Active&quot; and &quot;active&quot; are different tags).
+                  </p>
+                </div>
+
+                {/* Clear Filters Button */}
+                {hasActiveFilters && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCreatedFrom('');
+                      setCreatedTo('');
+                      setLastEditFrom('');
+                      setLastEditTo('');
+                      setTagsInput('');
+                    }}
+                    className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
+                    disabled={isRunning}
+                  >
+                    Clear all filters
+                  </button>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Mode Selection */}
