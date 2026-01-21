@@ -499,7 +499,7 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
                 <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
                   Source Filters
                 </span>
-                {(createdFrom || createdTo || lastEditFrom || lastEditTo || tagsInput) && (
+                {(createdFrom || createdTo || lastEditFrom || lastEditTo || tagsInput.trim().split(',').some(tag => tag.trim().length > 0)) && (
                   <span className="text-xs bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 px-2 py-0.5 rounded">
                     Active
                   </span>
@@ -598,7 +598,7 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
                 </div>
 
                 {/* Clear Filters Button */}
-                {(createdFrom || createdTo || lastEditFrom || lastEditTo || tagsInput) && (
+                {(createdFrom || createdTo || lastEditFrom || lastEditTo || tagsInput.trim().split(',').some(tag => tag.trim().length > 0)) && (
                   <button
                     type="button"
                     onClick={() => {
