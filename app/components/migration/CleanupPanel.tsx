@@ -182,7 +182,7 @@ export function CleanupPanel({ appId }: CleanupPanelProps) {
             <div className="ml-3">
               <h3 className="text-sm font-medium text-red-800 dark:text-red-400">Error</h3>
               <div className="mt-2 text-sm text-red-700 dark:text-red-300">{error}</div>
-              {error.includes('20,000') && (
+              {error.includes('Podio API offset limit of 20,000 items exceeded') && (
                 <div className="mt-3 p-2 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded text-xs text-yellow-800 dark:text-yellow-200">
                   <span className="font-bold">Tip:</span> Podio has a 20,000 item limit for basic pagination. Use <strong>Source Filters</strong> above to process your data in smaller chunks (e.g. by creation date).
                 </div>

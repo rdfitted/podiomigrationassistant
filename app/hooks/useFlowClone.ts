@@ -56,11 +56,13 @@ export function useFlowClone(sourceAppId?: number, targetAppId?: number) {
     setFlowsLoading(true);
     setFlowsError(null);
 
-    const abortController = new AbortController();
+    // Abort previous loadFlows request if still in flight
+    abortControllerRef.current?.abort('New loadFlows request started');
+    abortControllerRef.current = new AbortController();
 
     try {
       const response = await fetch(`/api/globiflow/apps/${sourceAppId}/flows`, {
-        signal: abortController.signal
+        signal: abortControllerRef.current.signal
       });
       const data = await response.json();
 

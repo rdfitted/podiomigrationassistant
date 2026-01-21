@@ -193,6 +193,16 @@ function formatMatchValue(value: unknown, fieldType: string): string {
       }
       return String(value);
 
+    case 'date':
+      if (typeof value === 'object' && value !== null && 'start' in value) {
+        const date = value as { start?: string; end?: string };
+        if (date.end && date.start !== date.end) {
+          return `${date.start} to ${date.end}`;
+        }
+        return date.start || '';
+      }
+      return String(value);
+
     default:
       return String(value);
   }
