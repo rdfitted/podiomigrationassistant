@@ -11,6 +11,8 @@ import { normalizeForMatch } from '../items/prefetch-cache';
 import { CleanupJobNotFoundError, CleanupValidationError } from './errors';
 import { PodioHttpClient } from '../../podio/http/client';
 import { VALID_MATCH_FIELD_TYPES, INVALID_MATCH_FIELD_TYPES, isInvalidMatchFieldType } from '../items/field-mapping';
+import { ItemMigrationFilters } from '../items/types';
+import { convertFilters, validateFilters } from '../items/filter-converter';
 
 /**
  * Validate that a field type is suitable for matching
@@ -45,6 +47,8 @@ export async function createCleanupJob(
     mode: request.mode,
     keepStrategy: request.keepStrategy || 'oldest',
     dryRun: request.dryRun,
+    hasFilters: !!request.filters,
+    filters: request.filters,
   });
 
   // Validate match field type (required)
@@ -72,7 +76,7 @@ export async function createCleanupJob(
     matchField: { external_id: matchField.external_id, label: matchField.label, type: matchField.type },
   });
 
-  // Create cleanup job in state store
+  // Create cleanup job in state store (include filters for reproducibility)
   const job = await migrationStateStore.createMigrationJob(
     String(request.appId), // Using appId as spaceId
     String(request.appId), // Same app for cleanup
@@ -84,6 +88,7 @@ export async function createCleanupJob(
       keepStrategy: request.keepStrategy || 'oldest',
       batchSize: request.batchSize || 100,
       concurrency: request.concurrency || 3,
+      ...(request.filters && { filters: request.filters }),
     }
   );
 
@@ -155,12 +160,16 @@ export async function detectDuplicateGroups(
   options?: {
     jobId?: string;
     onPauseCheck?: () => boolean;
+    filters?: ItemMigrationFilters;
   }
 ): Promise<DuplicateGroup[]> {
+  const hasFilters = options?.filters && Object.keys(options.filters).length > 0;
   logger.info('Detecting duplicate groups with streaming', {
     appId,
     matchField,
     jobId: options?.jobId,
+    hasFilters,
+    filters: hasFilters ? options.filters : undefined,
   });
 
   const startTime = Date.now();
@@ -175,8 +184,22 @@ export async function detectDuplicateGroups(
   const debugSamples: Array<{ itemId: number; raw: any; matchValue: any; normalized: string }> = [];
   const emptyFieldCount = { noField: 0, emptyValue: 0 };
 
+  // Validate and convert user-friendly filters to Podio API format
+  // Early return pattern: skip validation/conversion entirely when no filters provided
+  let podioFilters: Record<string, unknown> | undefined;
+  if (hasFilters) {
+    const validation = validateFilters(options!.filters);
+    if (!validation.valid) {
+      throw new CleanupValidationError(
+        `Invalid source filters: ${validation.errors.join('; ')}`
+      );
+    }
+    podioFilters = convertFilters(options!.filters);
+  }
+
   for await (const batch of streamItems(client, appId, {
     batchSize: 500,
+    filters: podioFilters,
   })) {
     // Check for pause request before processing batch
     if (options?.onPauseCheck && options.onPauseCheck()) {
