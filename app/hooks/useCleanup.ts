@@ -180,9 +180,15 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
       abortControllerRef.current?.abort('New poll request started');
       abortControllerRef.current = new AbortController();
 
+      // Set up timeout to abort request after 30 seconds
+      const timeoutId = setTimeout(() => {
+        abortControllerRef.current?.abort('Poll timeout');
+      }, 30_000);
+
       const response = await fetch(`/api/migration/cleanup/${currentJobId}`, {
         signal: abortControllerRef.current.signal,
       });
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         if (!mountedRef.current) return;
@@ -231,15 +237,23 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
         setIsPolling(false);
       }
     } catch (err) {
-      // Ignore abort errors
-      if (err instanceof Error && err.name === 'AbortError') {
+      // Ignore abort errors (including timeouts - will retry on next poll)
+      if (err instanceof Error && (
+        err.name === 'AbortError' ||
+        err.message === 'Poll timeout' ||
+        err.message?.includes('aborted')
+      )) {
+        // Don't stop polling on timeouts - just let the next interval try again
         return;
       }
 
       if (!mountedRef.current) return;
 
-      setError(err instanceof Error ? err.message : 'Failed to poll job status');
-      setIsPolling(false);
+      // Log but don't stop polling on transient errors - the job may still be running
+      console.warn('Job poll error (will retry):', err instanceof Error ? err.message : err);
+      // Only stop polling and show error for definitive failures
+      // setError(err instanceof Error ? err.message : 'Failed to poll job status');
+      // setIsPolling(false);
     }
   }, [updateJobProgress, updateJobStatus]);
 

@@ -71,10 +71,10 @@ export function useRateLimitStatus(options: UseRateLimitStatusOptions = {}) {
     abortControllerRef.current?.abort('New request started');
     abortControllerRef.current = new AbortController();
 
-    // Set up timeout to abort request after 10 seconds
+    // Set up timeout to abort request after 30 seconds (increased for heavy loads)
     const timeoutId = setTimeout(() => {
       abortControllerRef.current?.abort('Request timeout');
-    }, 10_000);
+    }, 30_000);
 
     try {
       setIsLoading(true);
@@ -122,8 +122,13 @@ export function useRateLimitStatus(options: UseRateLimitStatusOptions = {}) {
     } catch (err) {
       clearTimeout(timeoutId);
 
-      // Ignore abort errors (component unmounted or new request started)
-      if (err instanceof Error && err.name === 'AbortError') {
+      // Ignore abort errors (component unmounted, new request started, or timeout)
+      if (err instanceof Error && (
+        err.name === 'AbortError' ||
+        err.message === 'Request timeout' ||
+        err.message?.includes('aborted')
+      )) {
+        // Silent retry for timeouts - don't count as errors
         return;
       }
 
