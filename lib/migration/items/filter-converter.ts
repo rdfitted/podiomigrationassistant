@@ -17,16 +17,43 @@ interface PodioDateRange {
   to?: string;
 }
 
-const USER_FRIENDLY_FILTER_KEYS = ['createdFrom', 'createdTo', 'lastEditFrom', 'lastEditTo'] as const;
+const USER_FRIENDLY_FILTER_KEYS = ['createdFrom', 'createdTo', 'lastEditFrom', 'lastEditTo', 'tags'] as const;
+
+/**
+ * Normalize date string to YYYY-MM-DD format for Podio API
+ * Accepts any ISO 8601 format and extracts the date portion
+ */
+function normalizeDateToYYYYMMDD(dateStr: string | undefined): string | undefined {
+  if (!dateStr) {
+    return undefined;
+  }
+
+  const trimmed = dateStr.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  // Extract YYYY-MM-DD from various ISO 8601 formats
+  const dateOnlyMatch = /^(\d{4})-(\d{2})-(\d{2})/.exec(trimmed);
+  if (dateOnlyMatch) {
+    return `${dateOnlyMatch[1]}-${dateOnlyMatch[2]}-${dateOnlyMatch[3]}`;
+  }
+
+  return trimmed; // Fallback: return as-is if no match
+}
 
 function buildDateRange(from?: string, to?: string): PodioDateRange | undefined {
   if (!from && !to) {
     return undefined;
   }
 
+  // Normalize dates to YYYY-MM-DD format before creating range
+  const normalizedFrom = normalizeDateToYYYYMMDD(from);
+  const normalizedTo = normalizeDateToYYYYMMDD(to);
+
   return {
-    ...(from && { from }),
-    ...(to && { to }),
+    ...(normalizedFrom && { from: normalizedFrom }),
+    ...(normalizedTo && { to: normalizedTo }),
   };
 }
 
