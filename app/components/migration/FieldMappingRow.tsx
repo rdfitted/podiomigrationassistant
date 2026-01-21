@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import { isReadOnlyTargetFieldType } from '@/lib/migration/items/field-mapping';
 
 export interface AppFieldInfo {
   field_id: number;
@@ -106,9 +107,8 @@ export function FieldMappingRow({ entry, targetFields, onMap, onUnmap }: FieldMa
 
   // Filter out read-only field types from target options
   // These field types cannot be written to via the API
-  const readOnlyFieldTypes = ['calculation', 'created_on', 'created_by', 'created_via'];
   const writableTargetFields = targetFields.filter(
-    (field) => !readOnlyFieldTypes.includes(field.type)
+    (field) => !isReadOnlyTargetFieldType(field.type)
   );
 
   // Keyboard navigation handler for select
@@ -130,6 +130,14 @@ export function FieldMappingRow({ entry, targetFields, onMap, onUnmap }: FieldMa
     }
   };
 
+  const isCurrentTargetReadOnly =
+    !!entry.targetFieldId &&
+    targetFields.some(
+      (field) =>
+        field.field_id.toString() === entry.targetFieldId &&
+        isReadOnlyTargetFieldType(field.type)
+    );
+
   return (
     <div className="grid grid-cols-12 gap-2 p-2 border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800">
       {/* Source field */}
@@ -147,7 +155,11 @@ export function FieldMappingRow({ entry, targetFields, onMap, onUnmap }: FieldMa
 
       {/* Mapping status indicator */}
       <div className="col-span-1 flex items-center justify-center">
-        {entry.hasTypeMismatch ? (
+        {isCurrentTargetReadOnly ? (
+          <span className="text-red-500 cursor-help" title="Read-only field: This field cannot be updated via the API. Please map to a writable field.">
+            🚫
+          </span>
+        ) : entry.hasTypeMismatch ? (
           <span className="text-yellow-500 cursor-help" title={typeMismatchTooltip}>
             ⚠️
           </span>
@@ -172,16 +184,34 @@ export function FieldMappingRow({ entry, targetFields, onMap, onUnmap }: FieldMa
             }
           }}
           onKeyDown={handleKeyDown}
-          className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400"
+          className={`w-full px-2 py-1.5 text-sm border rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 ${
+            isCurrentTargetReadOnly ? 'border-red-300 dark:border-red-700 ring-1 ring-red-500' : 'border-gray-300 dark:border-gray-600'
+          }`}
           aria-label={`Map ${entry.sourceLabel} to target field`}
         >
           <option value="">-- Select target field --</option>
-          {writableTargetFields.map((tf) => (
-            <option key={tf.field_id} value={tf.field_id.toString()}>
-              {tf.label} ({tf.type})
-            </option>
-          ))}
+          <optgroup label="Writable Fields">
+            {writableTargetFields.map((tf) => (
+              <option key={tf.field_id} value={tf.field_id.toString()}>
+                {tf.label} ({tf.type})
+              </option>
+            ))}
+          </optgroup>
+          <optgroup label="Read-only Fields (Cannot Map)">
+            {targetFields
+              .filter((field) => isReadOnlyTargetFieldType(field.type))
+              .map((tf) => (
+                <option key={tf.field_id} value={tf.field_id.toString()} disabled>
+                  {tf.label} ({tf.type}) - Read-only
+                </option>
+              ))}
+          </optgroup>
         </select>
+        {isCurrentTargetReadOnly && (
+          <p className="mt-1 text-[10px] text-red-600 dark:text-red-400">
+            Target field is read-only and will be skipped during migration.
+          </p>
+        )}
       </div>
 
       {/* Actions */}

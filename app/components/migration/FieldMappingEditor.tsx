@@ -5,6 +5,26 @@ import { FieldMapping } from '@/lib/migration/items/types';
 import { FieldMappingHeader } from './FieldMappingHeader';
 import { FieldMappingRow, AppFieldInfo, FieldMappingEntry } from './FieldMappingRow';
 
+function areFieldMappingsEqual(a: FieldMapping, b: FieldMapping): boolean {
+  if (a === b) {
+    return true;
+  }
+
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) {
+    return false;
+  }
+
+  for (const key of aKeys) {
+    if (a[key] !== b[key]) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 export interface FieldMappingEditorProps {
   sourceAppId: number;
   targetAppId: number;
@@ -37,6 +57,17 @@ export function FieldMappingEditor({
     isLoading: true,
     error: null,
   });
+
+  // Keep internal state in sync if the parent updates initialMapping (e.g., retry flow)
+  useEffect(() => {
+    if (!initialMapping) {
+      return;
+    }
+
+    setState((s) =>
+      areFieldMappingsEqual(s.mapping, initialMapping) ? s : { ...s, mapping: initialMapping }
+    );
+  }, [initialMapping]);
 
   // Fetch app structures on mount or when app IDs change
   useEffect(() => {

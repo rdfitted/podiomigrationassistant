@@ -232,6 +232,8 @@ export interface ItemMigrationStatusResponse {
     code?: string;
     timestamp: string;
   }>;
+  /** Field mapping used for this job */
+  fieldMapping?: FieldMapping;
   /** Error statistics by category */
   errorsByCategory?: Record<string, {
     count: number;

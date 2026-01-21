@@ -11,6 +11,7 @@ import { isJobActive } from '../job-lifecycle';
 import { failureLogger } from './failure-logger';
 import { maskPII } from '../utils/pii-masking';
 import { validateFilters } from './filter-validator';
+import { isReadOnlyTargetFieldType } from './field-mapping';
 
 /**
  * Field types that are valid for matching
@@ -389,6 +390,7 @@ export async function getItemMigrationJob(
       code: err.code,
       timestamp: err.timestamp.toISOString(),
     })),
+    fieldMapping: metadata?.fieldMapping,
     errorsByCategory: Object.keys(errorsByCategory).length > 0 ? errorsByCategory : undefined,
     resumeToken: metadata?.resumeToken,
     canResume: job.status === 'failed' && !!metadata?.resumeToken,
@@ -455,15 +457,6 @@ export async function convertFieldMappingToExternalIds(
 
   const externalIdMapping: FieldMapping = {};
 
-  // Read-only field types that cannot be set via API (target fields only)
-  const readOnlyFieldTypes = [
-    'calculation',     // Calculated/formula fields
-    'created_on',      // Creation timestamp (system field)
-    'created_by',      // Creator (system field)
-    'created_via',     // Creation method (system field)
-    'app_item_id_icon' // App item ID display field
-  ];
-
   // Convert source field_id -> target field_id to source external_id -> target external_id
   let filteredCount = 0;
   for (const [sourceFieldId, targetFieldId] of Object.entries(fieldMapping)) {
@@ -472,7 +465,7 @@ export async function convertFieldMappingToExternalIds(
 
     if (sourceField?.external_id && targetField?.external_id) {
       // Skip if target field is read-only
-      if (readOnlyFieldTypes.includes(targetField.type)) {
+      if (isReadOnlyTargetFieldType(targetField.type)) {
         logger.debug('Skipping read-only target field during mapping conversion', {
           sourceFieldId,
           sourceExternalId: sourceField.external_id,
@@ -523,15 +516,6 @@ export async function buildDefaultFieldMapping(
 
     const mapping: FieldMapping = {};
 
-    // Read-only field types that cannot be set via API (target fields only)
-    const readOnlyFieldTypes = [
-      'calculation',     // Calculated/formula fields
-      'created_on',      // Creation timestamp (system field)
-      'created_by',      // Creator (system field)
-      'created_via',     // Creation method (system field)
-      'app_item_id_icon' // App item ID display field
-    ];
-
     // Field types to skip in auto-matching
     const skipAutoMatchFieldTypes = [
       'app' // App relationship fields - skip to prevent unintended app-to-app references
@@ -551,7 +535,7 @@ export async function buildDefaultFieldMapping(
       if (sourceField.external_id) {
         const targetField = targetApp.fields?.find(
           (f) => f.external_id === sourceField.external_id &&
-                 !readOnlyFieldTypes.includes(f.type) && // Exclude read-only target fields
+                 !isReadOnlyTargetFieldType(f.type) && // Exclude read-only target fields
                  !skipAutoMatchFieldTypes.includes(f.type) // Skip app fields
         );
         if (targetField) {
@@ -567,7 +551,7 @@ export async function buildDefaultFieldMapping(
           // Check if there's a match that was skipped due to read-only type
           const skippedField = targetApp.fields?.find(
             (f) => f.external_id === sourceField.external_id &&
-                   readOnlyFieldTypes.includes(f.type)
+                   isReadOnlyTargetFieldType(f.type)
           );
           if (skippedField) {
             logger.debug('Skipped read-only target field in external_id match', {
@@ -601,7 +585,7 @@ export async function buildDefaultFieldMapping(
             // Allow type mismatch if both are compatible types (e.g., calculation -> text)
             (f.type === sourceField.type ||
              (isCompatibleType(sourceField.type) && isCompatibleType(f.type))) &&
-            !readOnlyFieldTypes.includes(f.type) && // Exclude read-only target fields
+            !isReadOnlyTargetFieldType(f.type) && // Exclude read-only target fields
             !skipAutoMatchFieldTypes.includes(f.type) && // Skip app fields
             !Object.values(mapping).includes(f.field_id.toString())
         );
@@ -621,7 +605,7 @@ export async function buildDefaultFieldMapping(
     const mappedCount = Object.keys(mapping).length;
     const totalSource = sourceApp.fields?.length || 0;
     const totalTarget = targetApp.fields?.length || 0;
-    const writableTarget = targetApp.fields?.filter(f => !readOnlyFieldTypes.includes(f.type)).length || 0;
+    const writableTarget = targetApp.fields?.filter(f => !isReadOnlyTargetFieldType(f.type)).length || 0;
 
     logger.info('Field mapping built', {
       sourceFields: totalSource,
@@ -646,4 +630,181 @@ export async function updateMigrationProgress(
   progress: MigrationProgress
 ): Promise<void> {
   await migrationStateStore.updateJobProgress(jobId, progress);
+}
+
+/**
+ * Validation result for field mapping during retry
+ */
+export interface FieldMappingValidationResult {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+  /** Filtered mapping with read-only fields removed */
+  filteredMapping?: FieldMapping;
+}
+
+interface AppStructureField {
+  field_id: string | number;
+  type: string;
+  external_id?: string | null;
+  label?: string | null;
+}
+
+interface AppStructureDetailed {
+  fields?: AppStructureField[] | null;
+}
+
+/**
+ * Validate a field mapping for retry operations
+ * Checks that all fields exist in their respective apps and are writable
+ *
+ * @param fieldMapping - The field mapping to validate (source field ID -> target field ID)
+ * @param sourceAppId - Source application ID
+ * @param targetAppId - Target application ID
+ * @returns Validation result with errors, warnings, and filtered mapping
+ */
+export async function validateFieldMappingForRetry(
+  fieldMapping: FieldMapping,
+  sourceAppId: number,
+  targetAppId: number
+): Promise<FieldMappingValidationResult> {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  const filteredMapping: FieldMapping = {};
+
+  logger.info('Validating field mapping for retry', {
+    sourceAppId,
+    targetAppId,
+    mappingCount: Object.keys(fieldMapping).length,
+  });
+
+  try {
+    // Fetch current app structures
+    const sourceApp = (await getAppStructureDetailed(sourceAppId)) as AppStructureDetailed;
+    const targetApp = (await getAppStructureDetailed(targetAppId)) as AppStructureDetailed;
+
+    // Build lookup maps for faster field resolution
+    const sourceFieldsById = new Map<string, AppStructureField>();
+    const sourceFieldsByExternalId = new Map<string, AppStructureField>();
+    for (const field of sourceApp.fields || []) {
+      sourceFieldsById.set(field.field_id.toString(), field);
+      if (field.external_id) {
+        sourceFieldsByExternalId.set(field.external_id, field);
+      }
+    }
+
+    const targetFieldsById = new Map<string, AppStructureField>();
+    const targetFieldsByExternalId = new Map<string, AppStructureField>();
+    for (const field of targetApp.fields || []) {
+      targetFieldsById.set(field.field_id.toString(), field);
+      if (field.external_id) {
+        targetFieldsByExternalId.set(field.external_id, field);
+      }
+    }
+
+    // Validate each mapping entry
+    for (const [sourceFieldKey, targetFieldKey] of Object.entries(fieldMapping)) {
+      // Try to find source field (by ID first, then by external_id)
+      const sourceField = sourceFieldsById.get(sourceFieldKey) ||
+                          sourceFieldsByExternalId.get(sourceFieldKey);
+
+      // Try to find target field (by ID first, then by external_id)
+      const targetField = targetFieldsById.get(targetFieldKey) ||
+                          targetFieldsByExternalId.get(targetFieldKey);
+
+      // Check if source field exists
+      if (!sourceField) {
+        errors.push(
+          `Source field "${sourceFieldKey}" was not found in source app ${sourceAppId}. ` +
+          `It may have been deleted since the original migration.`
+        );
+        continue;
+      }
+
+      // Check if target field exists
+      if (!targetField) {
+        errors.push(
+          `Target field "${targetFieldKey}" was not found in target app ${targetAppId}. ` +
+          `It may have been deleted since the original migration.`
+        );
+        continue;
+      }
+
+      // Check if target field is read-only
+      if (isReadOnlyTargetFieldType(targetField.type)) {
+        warnings.push(
+          `Target field "${targetField.label || targetFieldKey}" (${targetField.type}) is read-only ` +
+          `and will be skipped during migration. Values cannot be set directly on ${targetField.type} fields.`
+        );
+        continue; // Skip this mapping - don't add to filtered
+      }
+
+      // Validate field type compatibility (warning only, not blocking)
+      if (sourceField.type !== targetField.type) {
+        // Allow certain cross-type mappings
+        const compatibleCrossTypes = [
+          ['calculation', 'text'],
+          ['calculation', 'number'],
+          ['number', 'text'],
+          ['text', 'number'],
+        ];
+
+        const isCompatible = compatibleCrossTypes.some(
+          ([src, tgt]) => sourceField.type === src && targetField.type === tgt
+        );
+
+        if (!isCompatible) {
+          warnings.push(
+            `Field type mismatch: "${sourceField.label || sourceFieldKey}" (${sourceField.type}) ` +
+            `-> "${targetField.label || targetFieldKey}" (${targetField.type}). ` +
+            `Data may not transfer correctly.`
+          );
+        }
+      }
+
+      // Add to filtered mapping (using field IDs for consistency)
+      filteredMapping[sourceField.field_id.toString()] = targetField.field_id.toString();
+    }
+
+    // Check if any valid mappings remain
+    if (Object.keys(filteredMapping).length === 0 && Object.keys(fieldMapping).length > 0) {
+      errors.push(
+        'No valid field mappings remain after filtering. All provided mappings either reference ' +
+        'non-existent fields or read-only target fields.'
+      );
+    }
+
+    const valid = errors.length === 0;
+
+    logger.info('Field mapping validation completed', {
+      sourceAppId,
+      targetAppId,
+      valid,
+      errorCount: errors.length,
+      warningCount: warnings.length,
+      originalMappings: Object.keys(fieldMapping).length,
+      filteredMappings: Object.keys(filteredMapping).length,
+    });
+
+    return {
+      valid,
+      errors,
+      warnings,
+      filteredMapping: valid ? filteredMapping : undefined,
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    logger.error('Failed to validate field mapping for retry', {
+      sourceAppId,
+      targetAppId,
+      error: errorMessage,
+    });
+
+    errors.push(`Failed to validate field mapping: ${errorMessage}`);
+    return {
+      valid: false,
+      errors,
+      warnings,
+    };
+  }
 }

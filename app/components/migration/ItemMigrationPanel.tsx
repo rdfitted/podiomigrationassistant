@@ -1,12 +1,12 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useItemMigration } from '@/app/hooks/useItemMigration';
 import { ItemMigrationProgress } from './ItemMigrationProgress';
 import { DryRunPreview } from './DryRunPreview';
 import { FieldMappingEditor } from './FieldMappingEditor';
 import { AppFieldInfo } from './FieldMappingRow';
-import { ResumptionConfig } from '@/lib/migration/items/types';
+import { FieldMapping, ResumptionConfig } from '@/lib/migration/items/types';
 
 export interface ItemMigrationPanelProps {
   sourceAppId?: number;
@@ -35,6 +35,38 @@ interface MigrationListItem {
   };
 }
 
+function calculateFieldMappingDiff(original: FieldMapping | null, current: FieldMapping | null) {
+  if (!original || !current) {
+    return { added: 0, changed: 0, removed: 0 };
+  }
+
+  let added = 0;
+  let changed = 0;
+  let removed = 0;
+
+  const allKeys = new Set([...Object.keys(original), ...Object.keys(current)]);
+  for (const key of allKeys) {
+    const originalValue = original[key];
+    const currentValue = current[key];
+
+    if (originalValue === undefined && currentValue !== undefined) {
+      added++;
+      continue;
+    }
+
+    if (originalValue !== undefined && currentValue === undefined) {
+      removed++;
+      continue;
+    }
+
+    if (originalValue !== currentValue) {
+      changed++;
+    }
+  }
+
+  return { added, changed, removed };
+}
+
 export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPanelProps) {
   const [mode, setMode] = useState<'create' | 'update' | 'upsert'>('create');
   const [sourceMatchField, setSourceMatchField] = useState<string>('');
@@ -47,6 +79,9 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
   const [transferFiles, setTransferFiles] = useState<boolean>(false); // File transfer toggle
   const [showFieldMapping, setShowFieldMapping] = useState(false);
   const [showSourceFilters, setShowSourceFilters] = useState(false);
+  const [showRetryFieldMapping, setShowRetryFieldMapping] = useState(false);
+  const [retryFieldMapping, setRetryFieldMapping] = useState<FieldMapping | null>(null);
+  const [originalFieldMapping, setOriginalFieldMapping] = useState<FieldMapping | null>(null);
 
   // Source filters state
   const [createdFrom, setCreatedFrom] = useState<string>('');
@@ -94,6 +129,21 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
 
   const currentMapping = fieldMappingOverride || fieldMapping;
   const isUsingCustomMapping = !!fieldMappingOverride;
+
+  // Sync original field mapping from job status
+  useEffect(() => {
+    if (jobStatus?.fieldMapping && !originalFieldMapping) {
+      setOriginalFieldMapping(jobStatus.fieldMapping);
+      setRetryFieldMapping(jobStatus.fieldMapping);
+    }
+  }, [jobStatus?.fieldMapping, originalFieldMapping]);
+
+  const mappingDiff = useMemo(
+    () => calculateFieldMappingDiff(originalFieldMapping, retryFieldMapping),
+    [originalFieldMapping, retryFieldMapping]
+  );
+  const hasRetryMappingChanges =
+    mappingDiff.added > 0 || mappingDiff.changed > 0 || mappingDiff.removed > 0;
 
   // Calculate actual failed count (source of truth: failedItems.length)
   const actualFailedCount = jobStatus
@@ -1037,25 +1087,116 @@ export function ItemMigrationPanel({ sourceAppId, targetAppId }: ItemMigrationPa
                 )}
 
                 {/* Retry button */}
-                <button
-                  onClick={() => retryFailedItems(jobId)}
-                  disabled={isRetrying}
-                  className="w-full py-2 px-4 bg-orange-600 hover:bg-orange-700 disabled:bg-orange-400 text-white rounded-md font-medium transition-colors disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                >
-                  {isRetrying ? (
-                    <>
-                      <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                      </svg>
-                      Retrying...
-                    </>
-                  ) : (
-                    <>
-                      🔄 Retry {actualFailedCount.toLocaleString()} Failed Items
-                    </>
-                  )}
-                </button>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => retryFailedItems(jobId)}
+                    disabled={isRetrying}
+                    className="flex-1 py-2 px-4 bg-orange-600 hover:bg-orange-700 disabled:bg-orange-400 text-white rounded-md font-medium transition-colors disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  >
+                    {isRetrying ? (
+                      <>
+                        <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                        </svg>
+                        Retrying...
+                      </>
+                    ) : (
+                      <>
+                        🔄 Retry {actualFailedCount.toLocaleString()} Failed Items
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    onClick={() => setShowRetryFieldMapping(!showRetryFieldMapping)}
+                    disabled={isRetrying}
+                    className="py-2 px-4 border border-orange-300 dark:border-orange-700 text-orange-700 dark:text-orange-300 hover:bg-orange-50 dark:hover:bg-orange-900/20 rounded-md font-medium transition-colors disabled:opacity-50"
+                    title="Edit Field Mapping & Retry"
+                  >
+                    ⚙️
+                  </button>
+                </div>
+
+                {/* Field Mapping Editor for Retry */}
+                {showRetryFieldMapping && sourceAppId && targetAppId && (
+                  <div className="mt-4 p-4 border border-orange-200 dark:border-orange-800 rounded-md bg-orange-50/30 dark:bg-orange-900/10">
+                    <div className="flex justify-between items-center mb-4">
+                      <h4 className="text-sm font-semibold text-orange-900 dark:text-orange-100">
+                        Edit Field Mapping for Retry
+                      </h4>
+                      <div className="flex items-center gap-3">
+                        {hasRetryMappingChanges && (
+                          <div className="flex gap-2 text-[10px] font-medium">
+                            {mappingDiff.added > 0 && <span className="text-green-600 dark:text-green-400">+{mappingDiff.added} added</span>}
+                            {mappingDiff.changed > 0 && <span className="text-blue-600 dark:text-blue-400">{mappingDiff.changed} changed</span>}
+                            {mappingDiff.removed > 0 && <span className="text-red-600 dark:text-red-400">-{mappingDiff.removed} removed</span>}
+                          </div>
+                        )}
+                        <div className="flex gap-2">
+                          {hasRetryMappingChanges && (
+                            <button
+                              onClick={() => setRetryFieldMapping(originalFieldMapping)}
+                              className="text-xs text-orange-700 dark:text-orange-300 hover:underline"
+                              type="button"
+                            >
+                              Revert to Original
+                            </button>
+                          )}
+                          <button
+                            onClick={() => setShowRetryFieldMapping(false)}
+                            className="text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                            type="button"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-md p-3 mb-4">
+                      <div className="flex">
+                        <div className="flex-shrink-0">
+                          <svg className="h-4 w-4 text-yellow-400" viewBox="0 0 20 20" fill="currentColor">
+                            <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                          </svg>
+                        </div>
+                        <div className="ml-2">
+                          <p className="text-xs text-yellow-700 dark:text-yellow-300">
+                            <strong>Note:</strong> Successfully migrated items ({jobStatus.progress.successful}) will not be re-processed with new mapping. Only failed items will be retried.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <FieldMappingEditor
+                      sourceAppId={sourceAppId}
+                      targetAppId={targetAppId}
+                      initialMapping={retryFieldMapping || undefined}
+                      onMappingChange={setRetryFieldMapping}
+                    />
+
+                    <div className="mt-4">
+                      <button
+                        onClick={async () => {
+                          if (window.confirm('Are you sure you want to retry failed items with modified field mapping?')) {
+                            await retryFailedItems(jobId, retryFieldMapping || undefined);
+                            // Clear retry field mapping UI state after successful submission
+                            setShowRetryFieldMapping(false);
+                            // Reset field mapping state so the updated mapping becomes the new "original"
+                            // for any future retry attempts (the new mapping will be loaded from job status)
+                            setOriginalFieldMapping(null);
+                            setRetryFieldMapping(null);
+                          }
+                        }}
+                        disabled={isRetrying}
+                        className="w-full py-2 px-4 bg-orange-600 hover:bg-orange-700 text-white rounded-md font-medium transition-colors"
+                      >
+                        {isRetrying ? 'Starting Retry...' : `Confirm & Retry ${actualFailedCount.toLocaleString()} Items`}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 

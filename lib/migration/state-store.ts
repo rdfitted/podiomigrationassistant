@@ -106,6 +106,26 @@ export interface ProgressSnapshot {
 }
 
 /**
+ * Source of field mapping (for tracking history)
+ */
+export type FieldMappingSource = 'original' | 'user-edited';
+
+/**
+ * Field mapping history entry for audit trail
+ * Tracks changes to field mappings during retries
+ */
+export interface FieldMappingHistoryEntry {
+  /** Timestamp when this mapping was applied */
+  timestamp: string;
+  /** The field mapping at this point in time (source field ID -> target field ID) */
+  mapping: Record<string, string>;
+  /** Source of this mapping */
+  source: FieldMappingSource;
+  /** Optional note explaining the change */
+  note?: string;
+}
+
+/**
  * Migration progress snapshot
  */
 export interface MigrationProgress {
@@ -144,6 +164,14 @@ export interface MigrationJob {
     appCount?: number;
     flowCount?: number;
     hookCount?: number;
+    /** Field mapping history for retry audit trail */
+    fieldMappingHistory?: FieldMappingHistoryEntry[];
+    /** Current field mapping (source field ID -> target field ID) */
+    fieldMapping?: Record<string, string>;
+    /** Number of retry attempts made */
+    retryAttempts?: number;
+    /** Timestamp of last retry attempt */
+    lastRetryTimestamp?: string;
     [key: string]: unknown;
   };
 }
