@@ -50,6 +50,19 @@ export function useItemMigration(options: UseItemMigrationOptions = {}): UseItem
   const [fieldMappingOverride, setFieldMappingOverride] = useState<FieldMapping | null>(null);
 
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef<boolean>(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+      }
+      abortControllerRef.current?.abort('Component unmounted');
+    };
+  }, []);
 
   /**
    * Update field mapping override
@@ -97,6 +110,8 @@ export function useItemMigration(options: UseItemMigrationOptions = {}): UseItem
           throw new Error(errorData.message || 'Failed to create migration job');
         }
 
+        if (!mountedRef.current) return;
+
         const data = await response.json();
         setJobId(data.jobId);
         setFieldMapping(data.fieldMapping);
@@ -111,9 +126,13 @@ export function useItemMigration(options: UseItemMigrationOptions = {}): UseItem
           description: `Migrating items from app ${sourceAppId} to ${targetAppId}`
         });
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Unknown error');
+        if (mountedRef.current) {
+          setError(err instanceof Error ? err.message : 'Unknown error');
+        }
       } finally {
-        setIsCreating(false);
+        if (mountedRef.current) {
+          setIsCreating(false);
+        }
       }
     },
     [sourceAppId, targetAppId, fieldMappingOverride, registerJob]
@@ -123,10 +142,20 @@ export function useItemMigration(options: UseItemMigrationOptions = {}): UseItem
    * Poll for job status
    */
   const pollJobStatus = useCallback(async (currentJobId: string) => {
+    if (!mountedRef.current) return;
+
     try {
-      const response = await fetch(`/api/migration/items/${currentJobId}`);
+      // Abort previous request if still in flight
+      abortControllerRef.current?.abort('New poll request started');
+      abortControllerRef.current = new AbortController();
+
+      const response = await fetch(`/api/migration/items/${currentJobId}`, {
+        signal: abortControllerRef.current.signal,
+      });
 
       if (!response.ok) {
+        if (!mountedRef.current) return;
+
         if (response.status === 404) {
           setError('Job not found');
           setIsPolling(false);
@@ -136,6 +165,9 @@ export function useItemMigration(options: UseItemMigrationOptions = {}): UseItem
       }
 
       const data: ItemMigrationStatusResponse = await response.json();
+
+      if (!mountedRef.current) return;
+
       setJobStatus(data);
 
       // Update global context with progress
@@ -157,6 +189,13 @@ export function useItemMigration(options: UseItemMigrationOptions = {}): UseItem
         setIsPolling(false);
       }
     } catch (err) {
+      // Ignore abort errors
+      if (err instanceof Error && err.name === 'AbortError') {
+        return;
+      }
+
+      if (!mountedRef.current) return;
+
       setError(err instanceof Error ? err.message : 'Failed to poll job status');
       setIsPolling(false);
     }
@@ -178,7 +217,10 @@ export function useItemMigration(options: UseItemMigrationOptions = {}): UseItem
       return () => {
         if (pollIntervalRef.current) {
           clearInterval(pollIntervalRef.current);
+          pollIntervalRef.current = null;
         }
+        // Abort any in-flight request
+        abortControllerRef.current?.abort('Polling effect cleanup');
       };
     }
   }, [jobId, isPolling, pollInterval, pollJobStatus]);
@@ -187,11 +229,16 @@ export function useItemMigration(options: UseItemMigrationOptions = {}): UseItem
    * Stop polling manually
    */
   const stopPolling = useCallback(() => {
-    setIsPolling(false);
+    if (mountedRef.current) {
+      setIsPolling(false);
+    }
     if (pollIntervalRef.current) {
       clearInterval(pollIntervalRef.current);
       pollIntervalRef.current = null;
     }
+    // Abort any in-flight request
+    abortControllerRef.current?.abort('Polling stopped manually');
+    abortControllerRef.current = null;
   }, []);
 
   /**
@@ -212,6 +259,9 @@ export function useItemMigration(options: UseItemMigrationOptions = {}): UseItem
       }
 
       const data: ItemMigrationStatusResponse = await response.json();
+
+      if (!mountedRef.current) return;
+
       setJobId(existingJobId);
       setJobStatus(data);
       // Note: Field mapping is stored in job metadata and used during resumption
@@ -238,9 +288,13 @@ export function useItemMigration(options: UseItemMigrationOptions = {}): UseItem
         setIsPolling(true);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load migration');
+      if (mountedRef.current) {
+        setError(err instanceof Error ? err.message : 'Failed to load migration');
+      }
     } finally {
-      setIsCreating(false);
+      if (mountedRef.current) {
+        setIsCreating(false);
+      }
     }
   }, [registerJob]);
 
@@ -268,6 +322,8 @@ export function useItemMigration(options: UseItemMigrationOptions = {}): UseItem
 
       await response.json();
 
+      if (!mountedRef.current) return true;
+
       // Start polling to track retry progress
       setIsPolling(true);
 
@@ -276,10 +332,14 @@ export function useItemMigration(options: UseItemMigrationOptions = {}): UseItem
 
       return true;
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to retry migration');
+      if (mountedRef.current) {
+        setError(err instanceof Error ? err.message : 'Failed to retry migration');
+      }
       return false;
     } finally {
-      setIsRetrying(false);
+      if (mountedRef.current) {
+        setIsRetrying(false);
+      }
     }
   }, [pollJobStatus]);
 

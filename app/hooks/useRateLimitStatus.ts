@@ -62,12 +62,19 @@ export function useRateLimitStatus(options: UseRateLimitStatusOptions = {}) {
   const isPollingRef = useRef<boolean>(false);
   const statusRef = useRef(status);
   const scheduleNextRef = useRef<(() => void) | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const fetchStatus = useCallback(async () => {
     if (!mountedRef.current) return;
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10_000);
+    // Abort any previous in-flight request
+    abortControllerRef.current?.abort('New request started');
+    abortControllerRef.current = new AbortController();
+
+    // Set up timeout to abort request after 10 seconds
+    const timeoutId = setTimeout(() => {
+      abortControllerRef.current?.abort('Request timeout');
+    }, 10_000);
 
     try {
       setIsLoading(true);
@@ -77,7 +84,7 @@ export function useRateLimitStatus(options: UseRateLimitStatusOptions = {}) {
         // Add cache prevention to avoid stale data
         cache: 'no-store',
         // Add timeout to prevent hanging requests
-        signal: controller.signal
+        signal: abortControllerRef.current.signal
       });
       clearTimeout(timeoutId);
 
@@ -114,6 +121,12 @@ export function useRateLimitStatus(options: UseRateLimitStatusOptions = {}) {
       }
     } catch (err) {
       clearTimeout(timeoutId);
+
+      // Ignore abort errors (component unmounted or new request started)
+      if (err instanceof Error && err.name === 'AbortError') {
+        return;
+      }
+
       if (!mountedRef.current) return;
 
       errorCountRef.current++;
@@ -221,6 +234,8 @@ export function useRateLimitStatus(options: UseRateLimitStatusOptions = {}) {
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current);
       }
+      // Abort any in-flight request on unmount
+      abortControllerRef.current?.abort('Component unmounted');
       scheduleNextRef.current = null;
     };
   }, [enabled, pollInterval, adaptivePolling, hasActiveJobs, fetchStatus]);

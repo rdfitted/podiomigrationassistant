@@ -52,7 +52,19 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
   const [error, setError] = useState<string | null>(null);
 
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const pollAbortRef = useRef<AbortController | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef<boolean>(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+      }
+      abortControllerRef.current?.abort('Component unmounted');
+    };
+  }, []);
 
   /**
    * Start a new cleanup job
@@ -86,6 +98,8 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
           throw new Error(errorData.message || 'Failed to create cleanup job');
         }
 
+        if (!mountedRef.current) return;
+
         const data = await response.json();
         setJobId(data.jobId);
         setIsPolling(true);
@@ -99,9 +113,13 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
           description: `Cleanup duplicates in app ${appId}`
         });
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Unknown error');
+        if (mountedRef.current) {
+          setError(err instanceof Error ? err.message : 'Unknown error');
+        }
       } finally {
-        setIsCreating(false);
+        if (mountedRef.current) {
+          setIsCreating(false);
+        }
       }
     },
     [appId, registerJob]
@@ -134,12 +152,18 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
           throw new Error(errorData.message || 'Failed to execute cleanup');
         }
 
+        if (!mountedRef.current) return;
+
         // Start polling for progress
         setIsPolling(true);
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Unknown error');
+        if (mountedRef.current) {
+          setError(err instanceof Error ? err.message : 'Unknown error');
+        }
       } finally {
-        setIsExecuting(false);
+        if (mountedRef.current) {
+          setIsExecuting(false);
+        }
       }
     },
     [jobId]
@@ -149,16 +173,20 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
    * Poll for job status
    */
   const pollJobStatus = useCallback(async (currentJobId: string) => {
+    if (!mountedRef.current) return;
+
     try {
       // Abort previous request if still in flight
-      pollAbortRef.current?.abort();
-      pollAbortRef.current = new AbortController();
+      abortControllerRef.current?.abort('New poll request started');
+      abortControllerRef.current = new AbortController();
 
       const response = await fetch(`/api/migration/cleanup/${currentJobId}`, {
-        signal: pollAbortRef.current.signal,
+        signal: abortControllerRef.current.signal,
       });
 
       if (!response.ok) {
+        if (!mountedRef.current) return;
+
         if (response.status === 404) {
           setError('Job not found');
           setIsPolling(false);
@@ -168,6 +196,9 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
       }
 
       const data: CleanupStatusResponse = await response.json();
+
+      if (!mountedRef.current) return;
+
       setJobStatus(data);
 
       // Update duplicate groups if available
@@ -204,6 +235,9 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
       if (err instanceof Error && err.name === 'AbortError') {
         return;
       }
+
+      if (!mountedRef.current) return;
+
       setError(err instanceof Error ? err.message : 'Failed to poll job status');
       setIsPolling(false);
     }
@@ -225,9 +259,10 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
       return () => {
         if (pollIntervalRef.current) {
           clearInterval(pollIntervalRef.current);
+          pollIntervalRef.current = null;
         }
         // Abort any in-flight request
-        pollAbortRef.current?.abort();
+        abortControllerRef.current?.abort('Polling effect cleanup');
       };
     }
   }, [jobId, isPolling, pollInterval, pollJobStatus]);
@@ -236,14 +271,16 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
    * Stop polling manually
    */
   const stopPolling = useCallback(() => {
-    setIsPolling(false);
+    if (mountedRef.current) {
+      setIsPolling(false);
+    }
     if (pollIntervalRef.current) {
       clearInterval(pollIntervalRef.current);
       pollIntervalRef.current = null;
     }
     // Abort any in-flight request
-    pollAbortRef.current?.abort();
-    pollAbortRef.current = null;
+    abortControllerRef.current?.abort('Polling stopped manually');
+    abortControllerRef.current = null;
   }, []);
 
   /**
@@ -264,6 +301,9 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
       }
 
       const data: CleanupStatusResponse = await response.json();
+
+      if (!mountedRef.current) return;
+
       setJobId(existingJobId);
       setJobStatus(data);
 
@@ -296,9 +336,13 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
         setIsPolling(true);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load cleanup job');
+      if (mountedRef.current) {
+        setError(err instanceof Error ? err.message : 'Failed to load cleanup job');
+      }
     } finally{
-      setIsCreating(false);
+      if (mountedRef.current) {
+        setIsCreating(false);
+      }
     }
   }, [registerJob]);
 

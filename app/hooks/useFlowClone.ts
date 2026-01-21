@@ -30,6 +30,19 @@ export function useFlowClone(sourceAppId?: number, targetAppId?: number) {
 
   // Use ref to avoid stale closures
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef<boolean>(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+      }
+      abortControllerRef.current?.abort('Component unmounted');
+    };
+  }, []);
 
   /**
    * Load flows for the source app
@@ -43,20 +56,32 @@ export function useFlowClone(sourceAppId?: number, targetAppId?: number) {
     setFlowsLoading(true);
     setFlowsError(null);
 
+    const abortController = new AbortController();
+
     try {
-      const response = await fetch(`/api/globiflow/apps/${sourceAppId}/flows`);
+      const response = await fetch(`/api/globiflow/apps/${sourceAppId}/flows`, {
+        signal: abortController.signal
+      });
       const data = await response.json();
 
       if (!data.success) {
         throw new Error(data.error?.message || 'Failed to load flows');
       }
 
-      setFlows(data.data);
+      if (mountedRef.current) {
+        setFlows(data.data);
+      }
     } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') return;
+
       console.error('Error loading flows:', error);
-      setFlowsError(error instanceof Error ? error.message : 'Failed to load flows');
+      if (mountedRef.current) {
+        setFlowsError(error instanceof Error ? error.message : 'Failed to load flows');
+      }
     } finally {
-      setFlowsLoading(false);
+      if (mountedRef.current) {
+        setFlowsLoading(false);
+      }
     }
   }, [sourceAppId]);
 
@@ -122,6 +147,8 @@ export function useFlowClone(sourceAppId?: number, targetAppId?: number) {
         throw new Error(data.error?.message || 'Failed to initiate clone');
       }
 
+      if (!mountedRef.current) return;
+
       // Set current job ID and start polling
       setCurrentJobId(data.data.jobId);
       startPollingJobStatus(data.data.jobId);
@@ -139,9 +166,13 @@ export function useFlowClone(sourceAppId?: number, targetAppId?: number) {
       setSelectedFlowIds(new Set());
     } catch (error) {
       console.error('Error initiating clone:', error);
-      setCloneError(error instanceof Error ? error.message : 'Failed to initiate clone');
+      if (mountedRef.current) {
+        setCloneError(error instanceof Error ? error.message : 'Failed to initiate clone');
+      }
     } finally {
-      setCloning(false);
+      if (mountedRef.current) {
+        setCloning(false);
+      }
     }
   }, [sourceAppId, targetAppId, selectedFlowIds, registerJob]);
 
@@ -153,19 +184,33 @@ export function useFlowClone(sourceAppId?: number, targetAppId?: number) {
       clearInterval(pollingIntervalRef.current);
       pollingIntervalRef.current = null;
     }
+    // Abort any in-flight request
+    abortControllerRef.current?.abort('Polling stopped manually');
+    abortControllerRef.current = null;
   }, []);
 
   /**
    * Poll job status
    */
   const pollJobStatus = useCallback(async (jobId: string) => {
+    if (!mountedRef.current) return;
+
     try {
-      const response = await fetch(`/api/globiflow/jobs/${jobId}`);
+      // Abort previous request if still in flight
+      abortControllerRef.current?.abort('New poll request started');
+      abortControllerRef.current = new AbortController();
+
+      const response = await fetch(`/api/globiflow/jobs/${jobId}`, {
+        signal: abortControllerRef.current.signal,
+      });
+
       const data = await response.json();
 
       if (!data.success) {
         throw new Error(data.error?.message || 'Failed to fetch job status');
       }
+
+      if (!mountedRef.current) return;
 
       setJobStatus(data.data);
 
@@ -193,8 +238,14 @@ export function useFlowClone(sourceAppId?: number, targetAppId?: number) {
         stopPollingJobStatus();
       }
     } catch (error) {
+      // Ignore abort errors
+      if (error instanceof Error && error.name === 'AbortError') {
+        return;
+      }
       console.error('Error polling job status:', error);
-      stopPollingJobStatus();
+      if (mountedRef.current) {
+        stopPollingJobStatus();
+      }
     }
   }, [stopPollingJobStatus, updateJobProgress, updateJobStatus]);
 
@@ -224,8 +275,10 @@ export function useFlowClone(sourceAppId?: number, targetAppId?: number) {
    */
   const clearCurrentJob = useCallback(() => {
     stopPollingJobStatus();
-    setCurrentJobId(null);
-    setJobStatus(null);
+    if (mountedRef.current) {
+      setCurrentJobId(null);
+      setJobStatus(null);
+    }
 
     // Unregister from global context
     unregisterJob('flow_clone');
@@ -252,6 +305,8 @@ export function useFlowClone(sourceAppId?: number, targetAppId?: number) {
         clearInterval(pollingIntervalRef.current);
         pollingIntervalRef.current = null;
       }
+      // Abort any in-flight request
+      abortControllerRef.current?.abort('Effect cleanup');
     };
   }, []);
 
