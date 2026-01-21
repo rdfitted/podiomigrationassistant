@@ -121,16 +121,20 @@ export function CleanupPanel({ appId }: CleanupPanelProps) {
   };
 
   // Handle proceeding from dry run to actual execution
-  const handleProceed = () => {
-    // Set dry run to false
+  // Uses existing detected groups instead of re-scanning
+  const handleProceed = async () => {
+    if (!duplicateGroups || duplicateGroups.length === 0) return;
+
+    // Update UI state
     setDryRun(false);
-    // Reset the current job state
-    reset();
-    // Re-run with the same configuration but dryRun: false
-    // Use setTimeout to allow state to update before starting
-    setTimeout(() => {
-      handleStartCleanup();
-    }, 100);
+
+    // Execute with the already-detected groups (no re-scanning)
+    const approvedGroups = duplicateGroups.map(group => ({
+      ...group,
+      approved: true,
+    }));
+
+    await executeApprovedGroups(approvedGroups);
   };
 
   const canStart = !!(appId && matchField);
