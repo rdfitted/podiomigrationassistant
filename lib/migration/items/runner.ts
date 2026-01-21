@@ -18,6 +18,7 @@ import { ThroughputCalculator } from './throughput-calculator';
 import { MemoryMonitor, logMemoryStats, forceGC } from '../memory-monitor';
 import { updateJobHeartbeat, getHeartbeatInterval } from '../job-lifecycle';
 import { failureLogger } from './failure-logger';
+import { getAppStructureCache } from './app-structure-cache';
 
 /**
  * Run an item migration job in the background
@@ -83,6 +84,17 @@ export async function runItemMigrationJob(jobId: string): Promise<void> {
       logger.info('Retry mode detected - will process only failed items', {
         jobId,
         failedItemCount: retryItemIds.length,
+      });
+
+      // Clear app structure cache to ensure fresh field data for retry
+      // This is important when field mappings have been updated between retries
+      const cache = getAppStructureCache();
+      cache.clearAppStructure(metadata.sourceAppId);
+      cache.clearAppStructure(metadata.targetAppId);
+      logger.info('Cleared app structure cache for retry', {
+        jobId,
+        sourceAppId: metadata.sourceAppId,
+        targetAppId: metadata.targetAppId,
       });
 
       // Save snapshot of current progress before clearing for retry

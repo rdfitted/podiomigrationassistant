@@ -55,7 +55,7 @@ export interface MigrationConfig {
   sourceAppId: number;
   /** Target app ID */
   targetAppId: number;
-  /** Field mapping (source external_id -> target external_id) */
+  /** Field mapping (source field_id -> target field_id) - will be converted to external_id by ItemMigrator */
   fieldMapping: Record<string, string>;
   /** Migration mode */
   mode: MigrationMode;

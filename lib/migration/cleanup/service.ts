@@ -10,44 +10,13 @@ import { logger } from '../logging';
 import { normalizeForMatch } from '../items/prefetch-cache';
 import { CleanupJobNotFoundError, CleanupValidationError } from './errors';
 import { PodioHttpClient } from '../../podio/http/client';
-
-/**
- * Field types that are valid for matching
- */
-const VALID_MATCH_FIELD_TYPES = [
-  'text',
-  'number',
-  'calculation',
-  'email',
-  'phone',
-  'tel',
-  'duration',
-  'money',
-  'location',
-  'question',
-];
-
-/**
- * Field types that should NOT be used for matching
- */
-const INVALID_MATCH_FIELD_TYPES = [
-  'app',
-  'category',
-  'contact',
-  'date',
-  'image',
-  'file',
-  'embed',
-  'created_on',
-  'created_by',
-  'created_via',
-];
+import { VALID_MATCH_FIELD_TYPES, INVALID_MATCH_FIELD_TYPES, isInvalidMatchFieldType } from '../items/field-mapping';
 
 /**
  * Validate that a field type is suitable for matching
  */
 function validateMatchFieldType(fieldType: string, fieldLabel: string): void {
-  if (INVALID_MATCH_FIELD_TYPES.includes(fieldType)) {
+  if ((INVALID_MATCH_FIELD_TYPES as readonly string[]).includes(fieldType)) {
     throw new CleanupValidationError(
       `Invalid match field type: "${fieldLabel}" is a ${fieldType} field. ` +
       `${fieldType.charAt(0).toUpperCase() + fieldType.slice(1)} fields cannot be used for matching because ` +
@@ -56,7 +25,7 @@ function validateMatchFieldType(fieldType: string, fieldLabel: string): void {
     );
   }
 
-  if (!VALID_MATCH_FIELD_TYPES.includes(fieldType)) {
+  if (!(VALID_MATCH_FIELD_TYPES as readonly string[]).includes(fieldType)) {
     logger.debug(`Uncommon match field type: ${fieldType}`, {
       fieldLabel,
       fieldType,

@@ -10,6 +10,7 @@ import { runItemMigrationJob } from '@/lib/migration/items/runner';
 import { ItemMigrationRequestPayload } from '@/lib/migration/items/types';
 import { loadPodioConfig } from '@/lib/podio/config';
 import { migrationStateStore } from '@/lib/migration/state-store';
+import { isValidFieldId } from '@/lib/migration/items/field-mapping';
 
 export const runtime = 'nodejs';
 
@@ -124,6 +125,29 @@ export async function POST(request: NextRequest) {
         },
         { status: 400 }
       );
+    }
+
+    // Validate field mapping format (if provided)
+    if (body.fieldMapping) {
+      const invalidFieldIds: string[] = [];
+      for (const [sourceId, targetId] of Object.entries(body.fieldMapping)) {
+        if (!isValidFieldId(sourceId)) {
+          invalidFieldIds.push(`source field ID "${sourceId}"`);
+        }
+        if (!isValidFieldId(targetId)) {
+          invalidFieldIds.push(`target field ID "${targetId}"`);
+        }
+      }
+
+      if (invalidFieldIds.length > 0) {
+        return NextResponse.json(
+          {
+            error: 'Invalid field mapping',
+            message: `Field mapping keys and values must be valid field IDs (numeric strings, max 15 digits). Invalid: ${invalidFieldIds.join(', ')}`,
+          },
+          { status: 400 }
+        );
+      }
     }
 
     // Create migration job

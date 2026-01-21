@@ -28,7 +28,7 @@ interface UseItemMigrationReturn {
   // Actions
   startMigration: (options: Omit<ItemMigrationRequestPayload, 'sourceAppId' | 'targetAppId'>) => Promise<void>;
   loadMigration: (jobId: string) => Promise<void>;
-  retryFailedItems: (jobId: string) => Promise<void>;
+  retryFailedItems: (jobId: string, fieldMapping?: FieldMapping) => Promise<boolean>;
   updateFieldMapping: (mapping: FieldMapping) => void;
   stopPolling: () => void;
   reset: () => void;
@@ -246,14 +246,19 @@ export function useItemMigration(options: UseItemMigrationOptions = {}): UseItem
 
   /**
    * Retry failed items from a migration job
+   * Returns true on success, false on failure
    */
-  const retryFailedItems = useCallback(async (retryJobId: string) => {
+  const retryFailedItems = useCallback(async (retryJobId: string, retryFieldMapping?: FieldMapping): Promise<boolean> => {
     setIsRetrying(true);
     setError(null);
 
     try {
       const response = await fetch(`/api/migration/items/${retryJobId}/retry`, {
         method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: retryFieldMapping ? JSON.stringify({ fieldMapping: retryFieldMapping }) : undefined,
       });
 
       if (!response.ok) {
@@ -261,15 +266,18 @@ export function useItemMigration(options: UseItemMigrationOptions = {}): UseItem
         throw new Error(errorData.message || 'Failed to retry migration');
       }
 
-      const data = await response.json();
+      await response.json();
 
       // Start polling to track retry progress
       setIsPolling(true);
 
       // Trigger immediate status update
       await pollJobStatus(retryJobId);
+
+      return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to retry migration');
+      return false;
     } finally {
       setIsRetrying(false);
     }
