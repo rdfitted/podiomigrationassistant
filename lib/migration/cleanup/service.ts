@@ -231,7 +231,7 @@ export async function detectDuplicateGroups(
       }
 
       // Extract the actual value from the field
-      let raw = Array.isArray(fieldValue.values) && fieldValue.values.length > 0
+      const raw = Array.isArray(fieldValue.values) && fieldValue.values.length > 0
         ? fieldValue.values[0]?.value
         : (fieldValue as any).value;
 

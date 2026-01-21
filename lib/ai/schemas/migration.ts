@@ -4,6 +4,27 @@
  */
 
 import { z } from 'zod';
+import { isValidDateFormat } from '../../migration/items/filter-validator';
+
+const itemMigrationDateSchema = z.string().refine(isValidDateFormat, {
+  message:
+    'Invalid date format. Expected ISO 8601 (e.g., "2025-01-01", "2025-01-01 09:30:00", "2025-01-01T09:30:00", "2025-01-01T09:30:00Z", or "2025-01-01T09:30:00+00:00")',
+});
+
+const itemMigrationDateFiltersSchema = z.object({
+  createdFrom: itemMigrationDateSchema
+    .optional()
+    .describe('Filter items created on or after this date (ISO 8601)'),
+  createdTo: itemMigrationDateSchema
+    .optional()
+    .describe('Filter items created on or before this date (ISO 8601)'),
+  lastEditFrom: itemMigrationDateSchema
+    .optional()
+    .describe('Filter items last edited on or after this date (ISO 8601)'),
+  lastEditTo: itemMigrationDateSchema
+    .optional()
+    .describe('Filter items last edited on or before this date (ISO 8601)'),
+});
 
 /**
  * Migration scope definition
@@ -261,7 +282,7 @@ export const migrationModeSchema = z.enum(['create', 'update', 'upsert']);
 export const getItemCountInputSchema = z.object({
   appId: z.number().describe('Podio app ID'),
   filters: z.record(z.unknown()).optional().describe('Optional filters to apply'),
-});
+}).merge(itemMigrationDateFiltersSchema);
 
 /**
  * Get item count output
@@ -294,7 +315,7 @@ export const migrateItemsInputSchema = z.object({
   stopOnError: z.boolean().default(false).describe('Stop on first error'),
   filters: z.record(z.unknown()).optional().describe('Filters for source items'),
   resumeToken: z.string().optional().describe('Token to resume from checkpoint'),
-});
+}).merge(itemMigrationDateFiltersSchema);
 
 /**
  * Migrate items output
@@ -325,7 +346,7 @@ export const exportItemsInputSchema = z.object({
   filters: z.record(z.unknown()).optional().describe('Filters to apply'),
   format: z.enum(['json', 'ndjson']).default('json').describe('Export format'),
   batchSize: z.number().min(100).max(1000).default(500).describe('Batch size for streaming'),
-});
+}).merge(itemMigrationDateFiltersSchema);
 
 /**
  * Export items output

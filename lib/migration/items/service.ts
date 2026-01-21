@@ -10,6 +10,7 @@ import { logger } from '../logging';
 import { isJobActive } from '../job-lifecycle';
 import { failureLogger } from './failure-logger';
 import { maskPII } from '../utils/pii-masking';
+import { validateFilters } from './filter-validator';
 
 /**
  * Field types that are valid for matching
@@ -242,6 +243,22 @@ export async function createItemMigrationJob(
     logger.info('Match field validation passed', {
       sourceField: { external_id: sourceField.external_id, label: sourceField.label, type: sourceField.type },
       targetField: { external_id: targetField.external_id, label: targetField.label, type: targetField.type },
+    });
+  }
+
+  // Validate filters if provided
+  if (request.filters) {
+    const filterValidation = validateFilters(request.filters);
+    if (!filterValidation.valid) {
+      throw new Error(`Invalid filters: ${filterValidation.errors.join('; ')}`);
+    }
+
+    logger.info('Item migration filters validated', {
+      createdFrom: request.filters.createdFrom,
+      createdTo: request.filters.createdTo,
+      lastEditFrom: request.filters.lastEditFrom,
+      lastEditTo: request.filters.lastEditTo,
+      tagCount: request.filters.tags?.length || 0,
     });
   }
 
