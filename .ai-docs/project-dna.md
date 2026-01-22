@@ -1,6 +1,6 @@
 # Project DNA - Podio Migration Agent
 
-> Curated patterns and insights from development sessions. Last updated: 2026-01-21
+> Curated patterns and insights from development sessions. Last updated: 2026-01-22
 
 ## Patterns That Work
 
@@ -26,9 +26,20 @@
 - Auto-reconnect logic needs AbortController to prevent race conditions on component mount (learned: 20260121-145015)
 - useMemo is better than useEffect for derived state like pagination (learned: 20260121-145015)
 
+### React Hooks Best Practices
+- Async useEffect must use AbortController + isMounted guard to prevent race conditions (learned: 20260122)
+- Props used in useEffect body MUST be in dependency array - don't suppress with eslint-disable (learned: 20260122)
+- Follow existing patterns in same file - if one useEffect uses AbortController, all async effects should (learned: 20260122)
+
+### TypeScript Best Practices
+- Extend interfaces with `Partial<Base>` instead of duplicating fields for optional inheritance (learned: 20260122)
+- Import types from canonical location rather than redefining (learned: 20260122)
+
 ## Patterns That Failed
 
-*No failed patterns recorded yet*
+### eslint-disable for Dependency Arrays
+- Suppressing `react-hooks/exhaustive-deps` with empty deps while using props leads to stale closures (learned: 20260122)
+- The "run only on mount" pattern is usually wrong when props are involved - re-run is usually desired
 
 ## Model Performance Notes
 
@@ -71,3 +82,4 @@ Common issues caught by reviewers:
 | 20260120-142840 | Add creation date filtering to item migrations | Success |
 | 20260120-193522 | Add source filters to duplicate cleanup | Success |
 | 20260121-145015 | Persist cleanup job state across page refresh | Success |
+| 20260122 | Fix race conditions and type duplication (code review) | Success |
