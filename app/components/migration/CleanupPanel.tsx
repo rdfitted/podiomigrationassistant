@@ -120,32 +120,45 @@ export function CleanupPanel({ appId }: CleanupPanelProps) {
 
   // Load past cleanups
   useEffect(() => {
+    const abortController = new AbortController();
+    let isMounted = true;
+
     async function loadPastCleanups() {
       if (!showPastCleanups) return;
 
       setIsLoadingCleanups(true);
       try {
-        const response = await fetch('/api/migration/cleanup');
+        const response = await fetch('/api/migration/cleanup', {
+          signal: abortController.signal,
+        });
         if (response.ok) {
           const data = await response.json();
           let jobs = data.cleanupJobs || [];
           // Filter for current appId if provided
           if (appId) {
-            jobs = jobs.filter((job: CleanupJobListItem) => 
+            jobs = jobs.filter((job: CleanupJobListItem) =>
               // Check metadata for appId match (loose check for string/number match)
               job.metadata?.appId == appId
             );
           }
-          setAllCleanups(jobs);
+          if (isMounted) setAllCleanups(jobs);
         }
       } catch (err) {
+        if (err instanceof Error && err.name === 'AbortError') {
+          return;
+        }
         console.error('Failed to load past cleanups:', err);
       } finally {
-        setIsLoadingCleanups(false);
+        if (isMounted) setIsLoadingCleanups(false);
       }
     }
 
     loadPastCleanups();
+
+    return () => {
+      isMounted = false;
+      abortController.abort();
+    };
   }, [showPastCleanups, appId]);
 
   // Compute paginated cleanups list (memoized to avoid unnecessary allocations)

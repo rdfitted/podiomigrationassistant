@@ -4,6 +4,7 @@
  */
 
 import { ItemMigrationFilters } from '../items/types';
+import { MigrationProgress } from '../state-store';
 
 /**
  * Cleanup mode determines how duplicates are handled
@@ -70,15 +71,9 @@ export interface CleanupJobMetadata {
 
 /**
  * Extended progress data for cleanup jobs
- * Includes fields beyond the base MigrationProgress type
+ * Extends MigrationProgress with cleanup-specific fields
  */
-export interface CleanupProgressExtended {
-  total?: number;
-  processed?: number;
-  successful?: number;
-  failed?: number;
-  percent?: number;
-  lastUpdate?: Date;
+export interface CleanupProgressExtended extends Partial<MigrationProgress> {
   totalItemsToDelete?: number; // Cleanup-specific: total items marked for deletion
 }
 

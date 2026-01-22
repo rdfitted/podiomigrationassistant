@@ -254,8 +254,7 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
     return () => {
       autoReconnectController.abort();
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Only run on mount - intentionally empty deps to avoid re-running on state changes
+  }, [appId]); // Run when appId changes to restore jobs for the correct app context
 
   /**
    * Start a new cleanup job
