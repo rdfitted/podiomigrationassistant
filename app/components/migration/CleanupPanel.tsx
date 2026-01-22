@@ -882,6 +882,7 @@ function StatusBadge({ status }: { status: string }) {
     deleting: 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200',
     completed: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
     failed: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200',
+    paused: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200',
     cancelled: 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200',
     planning: 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200',
   };
@@ -892,6 +893,7 @@ function StatusBadge({ status }: { status: string }) {
     deleting: 'Deleting',
     completed: 'Completed',
     failed: 'Failed',
+    paused: 'Paused',
     cancelled: 'Cancelled',
     planning: 'Planning',
   };
