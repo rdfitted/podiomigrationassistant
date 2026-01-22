@@ -60,7 +60,7 @@ export function useItemMigration(options: UseItemMigrationOptions = {}): UseItem
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current);
       }
-      abortControllerRef.current?.abort('Component unmounted');
+      abortControllerRef.current?.abort(new DOMException('Component unmounted', 'AbortError'));
     };
   }, []);
 
@@ -146,58 +146,79 @@ export function useItemMigration(options: UseItemMigrationOptions = {}): UseItem
 
     try {
       // Abort previous request if still in flight
-      abortControllerRef.current?.abort('New poll request started');
+      abortControllerRef.current?.abort(new DOMException('New poll request started', 'AbortError'));
       abortControllerRef.current = new AbortController();
 
-      const response = await fetch(`/api/migration/items/${currentJobId}`, {
-        signal: abortControllerRef.current.signal,
-      });
+      // Set up timeout to abort request after 30 seconds
+      const timeoutId = setTimeout(() => {
+        abortControllerRef.current?.abort(new DOMException('Poll timeout', 'AbortError'));
+      }, 30_000);
 
-      if (!response.ok) {
+      try {
+        const response = await fetch(`/api/migration/items/${currentJobId}`, {
+          signal: abortControllerRef.current.signal,
+        });
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          if (!mountedRef.current) return;
+
+          if (response.status === 404) {
+            setError('Job not found');
+            setIsPolling(false);
+            return;
+          }
+          throw new Error('Failed to fetch job status');
+        }
+
+        const data: ItemMigrationStatusResponse = await response.json();
+
         if (!mountedRef.current) return;
 
-        if (response.status === 404) {
-          setError('Job not found');
-          setIsPolling(false);
-          return;
+        setJobStatus(data);
+
+        // Update global context with progress
+        if (data.progress) {
+          updateJobProgress('item_migration', {
+            total: data.progress.total,
+            processed: data.progress.processed,
+            successful: data.progress.successful,
+            failed: data.progress.failed,
+            percent: data.progress.percent
+          });
         }
-        throw new Error('Failed to fetch job status');
-      }
 
-      const data: ItemMigrationStatusResponse = await response.json();
+        // Update global context with status
+        updateJobStatus('item_migration', data.status as MigrationJobStatus);
 
-      if (!mountedRef.current) return;
-
-      setJobStatus(data);
-
-      // Update global context with progress
-      if (data.progress) {
-        updateJobProgress('item_migration', {
-          total: data.progress.total,
-          processed: data.progress.processed,
-          successful: data.progress.successful,
-          failed: data.progress.failed,
-          percent: data.progress.percent
-        });
-      }
-
-      // Update global context with status
-      updateJobStatus('item_migration', data.status as MigrationJobStatus);
-
-      // Stop polling if job is completed or failed
-      if (data.status === 'completed' || data.status === 'failed') {
-        setIsPolling(false);
+        // Stop polling if job is completed, failed, or cancelled
+        if (data.status === 'completed' || data.status === 'failed' || data.status === 'cancelled') {
+          setIsPolling(false);
+        }
+      } catch (innerErr) {
+        // Clear timeout on error path to prevent memory leak
+        clearTimeout(timeoutId);
+        throw innerErr;
       }
     } catch (err) {
-      // Ignore abort errors
-      if (err instanceof Error && err.name === 'AbortError') {
+      // Ignore abort errors (including timeouts - will retry on next poll)
+      if (err instanceof Error && (
+        err.name === 'AbortError' ||
+        err.message === 'Poll timeout' ||
+        err.message === 'New poll request started' ||
+        err.message?.includes('aborted')
+      )) {
+        // Don't stop polling on timeouts - just let the next interval try again
         return;
       }
 
       if (!mountedRef.current) return;
 
-      setError(err instanceof Error ? err.message : 'Failed to poll job status');
-      setIsPolling(false);
+      // Log but don't stop polling on transient errors - the job may still be running
+      console.warn('Job poll error (will retry):', err instanceof Error ? err.message : err);
+      // Only stop polling and show error for definitive failures
+      // setError(err instanceof Error ? err.message : 'Failed to poll job status');
+      // setIsPolling(false);
     }
   }, [updateJobProgress, updateJobStatus]);
 
@@ -220,7 +241,7 @@ export function useItemMigration(options: UseItemMigrationOptions = {}): UseItem
           pollIntervalRef.current = null;
         }
         // Abort any in-flight request
-        abortControllerRef.current?.abort('Polling effect cleanup');
+        abortControllerRef.current?.abort(new DOMException('Polling effect cleanup', 'AbortError'));
       };
     }
   }, [jobId, isPolling, pollInterval, pollJobStatus]);
@@ -237,7 +258,7 @@ export function useItemMigration(options: UseItemMigrationOptions = {}): UseItem
       pollIntervalRef.current = null;
     }
     // Abort any in-flight request
-    abortControllerRef.current?.abort('Polling stopped manually');
+    abortControllerRef.current?.abort(new DOMException('Polling stopped manually', 'AbortError'));
     abortControllerRef.current = null;
   }, []);
 
