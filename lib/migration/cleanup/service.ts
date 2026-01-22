@@ -13,6 +13,7 @@ import { PodioHttpClient } from '../../podio/http/client';
 import { VALID_MATCH_FIELD_TYPES, INVALID_MATCH_FIELD_TYPES, isInvalidMatchFieldType } from '../items/field-mapping';
 import { ItemMigrationFilters } from '../items/types';
 import { convertFilters, validateFilters } from '../items/filter-converter';
+import { extractFieldValue, type PodioItemField } from '../../podio/resources/items';
 
 /**
  * Validate that a field type is suitable for matching
@@ -150,6 +151,64 @@ export async function getCleanupJobStatus(jobId: string): Promise<CleanupStatusR
 }
 
 /**
+ * Format a match value for display in the UI
+ * Handles complex types like money, phone, email to ensure they are human-readable
+ */
+function formatMatchValue(value: unknown, fieldType: string): string {
+  if (value === null || value === undefined) {
+    return '';
+  }
+
+  switch (fieldType) {
+    case 'money':
+      if (typeof value === 'object' && value !== null) {
+        const money = value as { value?: number; currency?: string };
+        return `${money.value ?? 0} ${money.currency ?? 'USD'}`;
+      }
+      return String(value);
+
+    case 'phone':
+    case 'tel':
+    case 'email':
+      if (Array.isArray(value)) {
+        return value
+          .map((v) => (typeof v === 'object' && v !== null ? (v as { value: string }).value : String(v)))
+          .filter(Boolean)
+          .join(', ');
+      }
+      return String(value);
+
+    case 'duration':
+      if (typeof value === 'number') {
+        const hours = Math.floor(value / 3600);
+        const minutes = Math.floor((value % 3600) / 60);
+        const seconds = value % 60;
+        return [
+          hours > 0 ? `${hours}h` : '',
+          minutes > 0 ? `${minutes}m` : '',
+          seconds > 0 || (hours === 0 && minutes === 0) ? `${seconds}s` : '',
+        ]
+          .filter(Boolean)
+          .join(' ');
+      }
+      return String(value);
+
+    case 'date':
+      if (typeof value === 'object' && value !== null && 'start' in value) {
+        const date = value as { start?: string; end?: string };
+        if (date.end && date.start !== date.end) {
+          return `${date.start} to ${date.end}`;
+        }
+        return date.start || '';
+      }
+      return String(value);
+
+    default:
+      return String(value);
+  }
+}
+
+/**
  * Detect duplicate groups in an app using efficient streaming with consistent normalization
  * Groups items by match field value and returns groups with duplicates
  */
@@ -175,6 +234,11 @@ export async function detectDuplicateGroups(
   const startTime = Date.now();
   let itemsProcessed = 0;
   let itemsSkipped = 0;
+
+  // Get field type for formatting
+  const app = await getAppStructureDetailed(appId);
+  const matchFieldDef = app.fields?.find((f) => f.external_id === matchField);
+  const fieldType = matchFieldDef?.type || 'text';
 
   // Group items by normalized match value
   const groups = new Map<string, DuplicateItem[]>();
@@ -222,18 +286,16 @@ export async function detectDuplicateGroups(
         continue;
       }
 
-      // Extract the actual value from the field
-      const raw = Array.isArray(fieldValue.values) && fieldValue.values.length > 0
-        ? fieldValue.values[0]?.value
-        : (fieldValue as any).value;
+      // Extract the actual value using the utility for proper handling of all 15+ Podio field types
+      // This handles: text, number, date, category, app, contact, money, location, duration,
+      // question, phone, email, calculation, and other field types correctly
+      const raw = extractFieldValue(fieldValue as PodioItemField);
 
-      // Unwrap nested objects (e.g., {text: ...}, {value: ...})
-      const matchValue =
-        typeof raw === 'object' && raw !== null
-          ? (raw.text ?? raw.value ?? String(raw))
-          : raw;
+      // For display/debugging purposes, keep a user-friendly representation
+      const matchValue = raw;
 
       // Normalize the match value using consistent logic
+      // normalizeForMatch handles arrays, objects, dates, and converts to comparable strings
       const normalizedValue = normalizeForMatch(matchValue);
 
       // Debug: Capture first 10 samples for logging
@@ -263,7 +325,7 @@ export async function detectDuplicateGroups(
         title: (item as any).title || `Item ${item.item_id}`,
         createdOn: item.created_on,
         lastEditOn: (item as any).last_event_on || item.created_on,
-        matchValue: String(matchValue),
+        matchValue: formatMatchValue(raw, fieldType),
         fieldValues: {}, // Can add preview fields here if needed
       };
 

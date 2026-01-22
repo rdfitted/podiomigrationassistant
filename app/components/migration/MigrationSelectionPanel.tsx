@@ -104,21 +104,32 @@ export function MigrationSelectionPanel({ onSelectionChange }: MigrationSelectio
       return;
     }
 
+    const abortController = new AbortController();
+
     async function fetchFlowsCount() {
       try {
-        const response = await fetch(`/api/globiflow/apps/${source.appId}/flows`);
+        const response = await fetch(`/api/globiflow/apps/${source.appId}/flows`, {
+          signal: abortController.signal,
+        });
         const data = await response.json();
 
         if (data.success && Array.isArray(data.data)) {
           setFlowsCount(data.data.length);
         }
       } catch (error) {
+        if (error instanceof Error && error.name === 'AbortError') {
+          return;
+        }
         console.error('Failed to fetch flows count:', error);
         setFlowsCount(undefined);
       }
     }
 
     fetchFlowsCount();
+
+    return () => {
+      abortController.abort();
+    };
   }, [source.appId]);
 
   // Fetch items count when source app changes
@@ -128,21 +139,32 @@ export function MigrationSelectionPanel({ onSelectionChange }: MigrationSelectio
       return;
     }
 
+    const abortController = new AbortController();
+
     async function fetchItemsCount() {
       try {
-        const response = await fetch(`/api/podio/apps/${source.appId}/items/count`);
+        const response = await fetch(`/api/podio/apps/${source.appId}/items/count`, {
+          signal: abortController.signal,
+        });
         const data = await response.json();
 
         if (typeof data.count === 'number') {
           setItemsCount(data.count);
         }
       } catch (error) {
+        if (error instanceof Error && error.name === 'AbortError') {
+          return;
+        }
         console.error('Failed to fetch items count:', error);
         setItemsCount(undefined);
       }
     }
 
     fetchItemsCount();
+
+    return () => {
+      abortController.abort();
+    };
   }, [source.appId]);
 
   return (

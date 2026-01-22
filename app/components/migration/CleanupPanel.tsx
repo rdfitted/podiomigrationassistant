@@ -52,28 +52,41 @@ export function CleanupPanel({ appId }: CleanupPanelProps) {
 
   // Fetch app field structure when appId changes
   useEffect(() => {
+    const abortController = new AbortController();
+    let isMounted = true;
+
     async function loadFields() {
       if (!appId) {
-        setAppFields([]);
+        if (isMounted) setAppFields([]);
         return;
       }
 
       setIsLoadingFields(true);
       try {
-        const response = await fetch(`/api/podio/apps/${appId}/structure`);
+        const response = await fetch(`/api/podio/apps/${appId}/structure`, {
+          signal: abortController.signal,
+        });
 
         if (response.ok) {
           const app = await response.json();
-          setAppFields(app.fields || []);
+          if (isMounted) setAppFields(app.fields || []);
         }
       } catch (err) {
+        if (err instanceof Error && err.name === 'AbortError') {
+          return;
+        }
         console.error('Failed to load field structure:', err);
       } finally {
-        setIsLoadingFields(false);
+        if (isMounted) setIsLoadingFields(false);
       }
     }
 
     loadFields();
+
+    return () => {
+      isMounted = false;
+      abortController.abort();
+    };
   }, [appId]);
 
   const handleStartCleanup = async () => {
@@ -186,6 +199,11 @@ export function CleanupPanel({ appId }: CleanupPanelProps) {
             <div className="ml-3">
               <h3 className="text-sm font-medium text-red-800 dark:text-red-400">Error</h3>
               <div className="mt-2 text-sm text-red-700 dark:text-red-300">{error}</div>
+              {error.includes('Podio API offset limit of 20,000 items exceeded') && (
+                <div className="mt-3 p-2 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded text-xs text-yellow-800 dark:text-yellow-200">
+                  <span className="font-bold">Tip:</span> Podio has a 20,000 item limit for basic pagination. Use <strong>Source Filters</strong> above to process your data in smaller chunks (e.g. by creation date).
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -536,7 +554,9 @@ export function CleanupPanel({ appId }: CleanupPanelProps) {
                     : 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
                 }`}
               >
-                {jobStatus.status.split('_').join(' ').toUpperCase()}
+                {jobStatus.status === 'detecting' 
+                  ? 'ANALYZING ITEMS...' 
+                  : jobStatus.status.split('_').join(' ').toUpperCase()}
               </span>
             </div>
             <button
@@ -548,7 +568,7 @@ export function CleanupPanel({ appId }: CleanupPanelProps) {
           </div>
 
           {/* Progress Bar */}
-          {jobStatus.progress && jobStatus.progress.percent > 0 && (
+          {jobStatus.progress && jobStatus.status !== 'detecting' && (
             <div>
               <div className="flex justify-between text-sm text-gray-700 dark:text-gray-300 mb-2">
                 <span>Progress</span>
@@ -559,6 +579,25 @@ export function CleanupPanel({ appId }: CleanupPanelProps) {
                   className="bg-blue-600 h-2 rounded-full transition-all"
                   style={{ width: `${jobStatus.progress.percent}%` }}
                 />
+              </div>
+            </div>
+          )}
+
+          {/* Detecting Message */}
+          {jobStatus.status === 'detecting' && (
+            <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-md border border-blue-100 dark:border-blue-900/30">
+              <div className="flex items-center">
+                <div className="mr-3">
+                  <svg className="animate-spin h-5 w-5 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                </div>
+                <div>
+                  <p className="text-sm text-blue-700 dark:text-blue-300">
+                    Scanning items for duplicates... This may take a while for large apps.
+                  </p>
+                </div>
               </div>
             </div>
           )}
