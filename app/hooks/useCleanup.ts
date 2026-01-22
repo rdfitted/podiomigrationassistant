@@ -14,6 +14,113 @@ import {
 import { useMigrationContext } from '@/app/contexts/MigrationContext';
 import type { MigrationJobStatus } from '@/app/contexts/MigrationContext';
 
+// localStorage persistence for cleanup job state
+const CLEANUP_STORAGE_KEY = 'podio-cleanup-active-job';
+const CLEANUP_STORAGE_TTL = 24 * 60 * 60 * 1000; // 24 hours
+
+interface StoredCleanupJob {
+  jobId: string;
+  appId: number;
+  savedAt: string;
+  expiresAt: string;
+}
+
+/**
+ * Load cleanup job from localStorage (SSR-safe)
+ */
+function loadCleanupJobFromStorage(): StoredCleanupJob | null {
+  if (typeof window === 'undefined' || !window.localStorage) return null;
+
+  try {
+    const stored = localStorage.getItem(CLEANUP_STORAGE_KEY);
+    if (!stored) return null;
+
+    const parsed = JSON.parse(stored);
+
+    // Validate parsed structure before using it
+    if (
+      !parsed ||
+      typeof parsed.jobId !== 'string' ||
+      typeof parsed.appId !== 'number' ||
+      typeof parsed.expiresAt !== 'string'
+    ) {
+      console.warn('[useCleanup] Invalid stored job format, clearing storage');
+      localStorage.removeItem(CLEANUP_STORAGE_KEY);
+      return null;
+    }
+
+    const now = Date.now();
+
+    // Check if expired
+    if (new Date(parsed.expiresAt).getTime() < now) {
+      localStorage.removeItem(CLEANUP_STORAGE_KEY);
+      return null;
+    }
+
+    return parsed as StoredCleanupJob;
+  } catch (error) {
+    // Handle specific localStorage errors gracefully
+    if (error instanceof DOMException && error.name === 'SecurityError') {
+      // localStorage blocked by security policy (private browsing, etc.)
+      return null;
+    }
+    console.error('Failed to load cleanup job from storage:', error);
+    return null;
+  }
+}
+
+/**
+ * Save cleanup job to localStorage (SSR-safe)
+ */
+function saveCleanupJobToStorage(jobId: string, appId: number): void {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+
+  try {
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + CLEANUP_STORAGE_TTL);
+
+    const toStore: StoredCleanupJob = {
+      jobId,
+      appId,
+      savedAt: now.toISOString(),
+      expiresAt: expiresAt.toISOString(),
+    };
+
+    localStorage.setItem(CLEANUP_STORAGE_KEY, JSON.stringify(toStore));
+  } catch (error) {
+    // Handle specific localStorage errors gracefully
+    if (error instanceof DOMException) {
+      if (error.name === 'QuotaExceededError') {
+        console.warn('[useCleanup] localStorage quota exceeded, cannot persist cleanup job');
+        return;
+      }
+      if (error.name === 'SecurityError') {
+        // localStorage blocked by security policy (private browsing, etc.)
+        return;
+      }
+    }
+    console.error('Failed to save cleanup job to storage:', error);
+  }
+}
+
+/**
+ * Clear cleanup job from localStorage (SSR-safe)
+ */
+function clearCleanupJobFromStorage(): void {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+
+  try {
+    localStorage.removeItem(CLEANUP_STORAGE_KEY);
+  } catch (error) {
+    // Handle specific localStorage errors gracefully
+    if (error instanceof DOMException && error.name === 'SecurityError') {
+      // localStorage blocked by security policy (private browsing, etc.)
+      return;
+    }
+    console.error('Failed to clear cleanup job from storage:', error);
+  }
+}
+
 interface UseCleanupOptions {
   appId?: number;
   pollInterval?: number; // milliseconds
@@ -67,6 +174,90 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
   }, []);
 
   /**
+   * Auto-reconnect to saved cleanup job on mount
+   * Checks localStorage for a saved job and loads it if valid
+   */
+  useEffect(() => {
+    const autoReconnectController = new AbortController();
+    const storedJob = loadCleanupJobFromStorage();
+
+    // Only auto-reconnect if:
+    // 1. We have a stored job
+    // 2. No job is currently active (jobId is null)
+    // 3. The stored appId matches current appId (if appId is provided)
+    if (storedJob && !jobId && (!appId || storedJob.appId === appId)) {
+      // Use an async IIFE to call loadCleanup
+      (async () => {
+        try {
+          const response = await fetch(`/api/migration/cleanup/${storedJob.jobId}`, {
+            signal: autoReconnectController.signal,
+          });
+
+          if (!response.ok) {
+            // Job not found or invalid - clear storage
+            clearCleanupJobFromStorage();
+            return;
+          }
+
+          const data: CleanupStatusResponse = await response.json();
+
+          // Don't restore completed/failed/cancelled jobs
+          if (['completed', 'failed', 'cancelled'].includes(data.status)) {
+            clearCleanupJobFromStorage();
+            return;
+          }
+
+          if (!mountedRef.current) return;
+
+          // Restore the job state
+          setJobId(storedJob.jobId);
+          setJobStatus(data);
+
+          if (data.duplicateGroups) {
+            setDuplicateGroups(data.duplicateGroups);
+          }
+
+          // Register with global migration context
+          registerJob({
+            jobId: storedJob.jobId,
+            tabType: 'cleanup',
+            status: data.status as MigrationJobStatus,
+            startedAt: new Date(data.startedAt),
+            progress: data.progress ? {
+              total: data.progress.totalItemsToDelete,
+              processed: data.progress.processedGroups,
+              successful: data.progress.deletedItems,
+              failed: data.progress.failedDeletions,
+              percent: data.progress.percent
+            } : undefined,
+            description: `Cleanup job ${storedJob.jobId}`
+          });
+
+          // Start polling if job is still in progress
+          if (['planning', 'detecting', 'deleting'].includes(data.status)) {
+            setIsPolling(true);
+          }
+        } catch (err) {
+          // Ignore abort errors (component unmounted)
+          if (err instanceof Error && err.name === 'AbortError') {
+            return;
+          }
+          if (mountedRef.current) {
+            setError(err instanceof Error ? err.message : 'Failed to restore cleanup job');
+            clearCleanupJobFromStorage();
+            unregisterJob('cleanup'); // Clean up global context if partially registered
+          }
+        }
+      })();
+    }
+
+    return () => {
+      autoReconnectController.abort();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Only run on mount - intentionally empty deps to avoid re-running on state changes
+
+  /**
    * Start a new cleanup job
    */
   const startCleanup = useCallback(
@@ -103,6 +294,9 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
         const data = await response.json();
         setJobId(data.jobId);
         setIsPolling(true);
+
+        // Persist to localStorage for page refresh recovery
+        saveCleanupJobToStorage(data.jobId, appId);
 
         // Register with global migration context
         registerJob({
@@ -227,6 +421,15 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
         // Update global context with status
         updateJobStatus('cleanup', data.status as MigrationJobStatus);
 
+        // Clear localStorage for terminal states (job ended, no need to persist)
+        if (
+          data.status === 'completed' ||
+          data.status === 'failed' ||
+          data.status === 'cancelled'
+        ) {
+          clearCleanupJobFromStorage();
+        }
+
         // Stop polling if job is completed, failed, cancelled, paused, or waiting for approval
         if (
           data.status === 'completed' ||
@@ -332,6 +535,11 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
         setDuplicateGroups(data.duplicateGroups);
       }
 
+      // Persist to localStorage for page refresh recovery (if we have an appId)
+      if (appId) {
+        saveCleanupJobToStorage(existingJobId, appId);
+      }
+
       // Register with global migration context
       registerJob({
         jobId: existingJobId,
@@ -359,13 +567,15 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
     } catch (err) {
       if (mountedRef.current) {
         setError(err instanceof Error ? err.message : 'Failed to load cleanup job');
+        // Clear storage if job load fails (job may be invalid/expired)
+        clearCleanupJobFromStorage();
       }
     } finally{
       if (mountedRef.current) {
         setIsCreating(false);
       }
     }
-  }, [registerJob]);
+  }, [appId, registerJob]);
 
   /**
    * Reset hook state
@@ -378,6 +588,9 @@ export function useCleanup(options: UseCleanupOptions = {}): UseCleanupReturn {
     setIsCreating(false);
     setIsExecuting(false);
     setError(null);
+
+    // Clear persisted job from localStorage
+    clearCleanupJobFromStorage();
 
     // Unregister from global context
     unregisterJob('cleanup');

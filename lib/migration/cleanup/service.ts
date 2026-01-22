@@ -4,7 +4,7 @@
  */
 
 import { migrationStateStore } from '../state-store';
-import { CleanupRequestPayload, CleanupStatusResponse, CleanupResult, DuplicateGroup, DuplicateItem, CleanupMode, KeepStrategy, JobStatus } from './types';
+import { CleanupRequestPayload, CleanupStatusResponse, CleanupResult, DuplicateGroup, DuplicateItem, CleanupMode, KeepStrategy, JobStatus, CleanupProgressExtended } from './types';
 import { getAppStructureDetailed } from '../../podio/migration';
 import { logger } from '../logging';
 import { normalizeForMatch } from '../items/prefetch-cache';
@@ -87,6 +87,7 @@ export async function createCleanupJob(
       matchField: request.matchField,
       mode: request.mode,
       keepStrategy: request.keepStrategy || 'oldest',
+      dryRun: request.dryRun ?? true,
       batchSize: request.batchSize || 100,
       concurrency: request.concurrency || 3,
       ...(request.filters && { filters: request.filters }),
@@ -121,8 +122,7 @@ export async function getCleanupJobStatus(jobId: string): Promise<CleanupStatusR
   const keepStrategy = metadata.keepStrategy as KeepStrategy || 'oldest';
   const duplicateGroups = metadata.duplicateGroups as DuplicateGroup[] | undefined;
 
-  const progress = job.progress;
-  const progressMetadata = progress as any; // Progress can have custom fields
+  const progress = job.progress as CleanupProgressExtended | undefined;
 
   return {
     jobId: job.id,
@@ -132,7 +132,7 @@ export async function getCleanupJobStatus(jobId: string): Promise<CleanupStatusR
     progress: {
       totalGroups: progress?.total || 0,
       processedGroups: progress?.processed || 0,
-      totalItemsToDelete: progressMetadata?.totalItemsToDelete || 0,
+      totalItemsToDelete: progress?.totalItemsToDelete || 0,
       deletedItems: progress?.successful || 0,
       failedDeletions: progress?.failed || 0,
       percent: progress?.percent || 0,

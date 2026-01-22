@@ -62,9 +62,24 @@ export interface CleanupJobMetadata {
   matchField: string;
   mode: CleanupMode;
   keepStrategy: KeepStrategy;
+  dryRun?: boolean;
   batchSize: number;
   concurrency: number;
   filters?: ItemMigrationFilters;
+}
+
+/**
+ * Extended progress data for cleanup jobs
+ * Includes fields beyond the base MigrationProgress type
+ */
+export interface CleanupProgressExtended {
+  total?: number;
+  processed?: number;
+  successful?: number;
+  failed?: number;
+  percent?: number;
+  lastUpdate?: Date;
+  totalItemsToDelete?: number; // Cleanup-specific: total items marked for deletion
 }
 
 /**

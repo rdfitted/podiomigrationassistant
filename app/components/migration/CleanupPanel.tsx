@@ -5,7 +5,7 @@
 
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useCleanup } from '@/app/hooks/useCleanup';
 import { DuplicateGroup, CleanupMode, KeepStrategy } from '@/lib/migration/cleanup/types';
 import { AppFieldInfo } from './FieldMappingRow';
@@ -13,6 +13,27 @@ import { DuplicateGroupsPreview } from './DuplicateGroupsPreview';
 
 export interface CleanupPanelProps {
   appId?: number;
+}
+
+interface CleanupJobListItem {
+  id: string;
+  status: string;
+  startedAt: string;
+  completedAt?: string;
+  progress?: {
+    totalItemsToDelete: number;
+    processedGroups: number;
+    deletedItems: number;
+    failedDeletions: number;
+    percent: number;
+    totalGroups?: number;
+  };
+  metadata?: {
+    appId: number;
+    matchField: string;
+    mode: CleanupMode;
+    dryRun?: boolean;
+  };
 }
 
 export function CleanupPanel({ appId }: CleanupPanelProps) {
@@ -37,6 +58,13 @@ export function CleanupPanel({ appId }: CleanupPanelProps) {
   const [isLoadingFields, setIsLoadingFields] = useState(false);
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
 
+  // Past Cleanups state
+  const [showPastCleanups, setShowPastCleanups] = useState(false);
+  const [allCleanups, setAllCleanups] = useState<CleanupJobListItem[]>([]);
+  const [isLoadingCleanups, setIsLoadingCleanups] = useState(false);
+  const [cleanupsPage, setCleanupsPage] = useState(0);
+  const CLEANUPS_PER_PAGE = 10;
+
   const {
     jobId,
     jobStatus,
@@ -47,6 +75,7 @@ export function CleanupPanel({ appId }: CleanupPanelProps) {
     error,
     startCleanup,
     executeApprovedGroups,
+    loadCleanup,
     reset,
   } = useCleanup({ appId });
 
@@ -88,6 +117,50 @@ export function CleanupPanel({ appId }: CleanupPanelProps) {
       abortController.abort();
     };
   }, [appId]);
+
+  // Load past cleanups
+  useEffect(() => {
+    async function loadPastCleanups() {
+      if (!showPastCleanups) return;
+
+      setIsLoadingCleanups(true);
+      try {
+        const response = await fetch('/api/migration/cleanup');
+        if (response.ok) {
+          const data = await response.json();
+          let jobs = data.cleanupJobs || [];
+          // Filter for current appId if provided
+          if (appId) {
+            jobs = jobs.filter((job: CleanupJobListItem) => 
+              // Check metadata for appId match (loose check for string/number match)
+              job.metadata?.appId == appId
+            );
+          }
+          setAllCleanups(jobs);
+        }
+      } catch (err) {
+        console.error('Failed to load past cleanups:', err);
+      } finally {
+        setIsLoadingCleanups(false);
+      }
+    }
+
+    loadPastCleanups();
+  }, [showPastCleanups, appId]);
+
+  // Compute paginated cleanups list (memoized to avoid unnecessary allocations)
+  const pastCleanups = useMemo(() => {
+    const start = cleanupsPage * CLEANUPS_PER_PAGE;
+    const end = start + CLEANUPS_PER_PAGE;
+    return allCleanups.slice(start, end);
+  }, [cleanupsPage, allCleanups]);
+
+  // Reset page when panel is toggled open
+  useEffect(() => {
+    if (showPastCleanups) {
+      setCleanupsPage(0);
+    }
+  }, [showPastCleanups]);
 
   const handleStartCleanup = async () => {
     // Build source filters if any are set
@@ -150,6 +223,14 @@ export function CleanupPanel({ appId }: CleanupPanelProps) {
     await executeApprovedGroups(approvedGroups);
   };
 
+  const handleLoadCleanup = async (id: string) => {
+    await loadCleanup(id);
+    setShowPastCleanups(false);
+  };
+
+  const cleanupsTotalCount = allCleanups.length;
+  const cleanupsHasMore = (cleanupsPage + 1) * CLEANUPS_PER_PAGE < cleanupsTotalCount;
+
   const canStart = !!(appId && matchField);
   const isRunning = isCreating || isPolling || isExecuting;
 
@@ -178,6 +259,118 @@ export function CleanupPanel({ appId }: CleanupPanelProps) {
           Find and remove duplicate items in an app based on matching field values
         </p>
       </div>
+
+      {/* Past Cleanups Section - Only show when no active job */}
+      {!jobId && (
+        <div className="mb-4 border border-gray-200 dark:border-gray-700 rounded-md">
+          <button
+            onClick={() => setShowPastCleanups(!showPastCleanups)}
+            className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-gray-50 dark:hover:bg-gray-800 rounded-t-md"
+            type="button"
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                Past Cleanups
+              </span>
+              {cleanupsTotalCount > 0 && (
+                <span className="text-xs bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 px-2 py-0.5 rounded">
+                  {cleanupsTotalCount}
+                </span>
+              )}
+            </div>
+            <svg
+              className={`w-5 h-5 transition-transform ${showPastCleanups ? 'rotate-180' : ''}`}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+
+          {showPastCleanups && (
+            <div className="px-4 py-3 border-t border-gray-200 dark:border-gray-700">
+              {isLoadingCleanups ? (
+                <div className="text-center py-4 text-sm text-gray-500 dark:text-gray-400">
+                  Loading cleanups...
+                </div>
+              ) : pastCleanups.length === 0 ? (
+                <div className="text-center py-4 text-sm text-gray-500 dark:text-gray-400">
+                  No past cleanups found
+                </div>
+              ) : (
+                <>
+                  <div className="space-y-2">
+                    {pastCleanups.map((job) => (
+                      <div
+                        key={job.id}
+                        className="p-3 border border-gray-200 dark:border-gray-600 rounded-md"
+                      >
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2">
+                            <StatusBadge status={job.status} />
+                            <span className="text-xs text-gray-500 dark:text-gray-400">
+                              {new Date(job.startedAt).toLocaleString()}
+                            </span>
+                            {job.metadata?.dryRun && (
+                              <span className="text-xs bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600">
+                                Dry Run
+                              </span>
+                            )}
+                          </div>
+                          {job.progress && (
+                            <span className="text-xs font-medium text-gray-700 dark:text-gray-300">
+                              {job.progress.deletedItems} deleted / {job.progress.totalItemsToDelete} identified
+                            </span>
+                          )}
+                        </div>
+                        {job.progress && job.progress.percent > 0 && (
+                          <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5 mb-2">
+                            <div
+                              className="bg-blue-600 h-1.5 rounded-full transition-all"
+                              style={{ width: `${job.progress.percent}%` }}
+                            />
+                          </div>
+                        )}
+                        {/* Action buttons */}
+                        <PastCleanupActions
+                          job={job}
+                          onView={() => handleLoadCleanup(job.id)}
+                        />
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Pagination controls */}
+                  {cleanupsTotalCount > CLEANUPS_PER_PAGE && (
+                    <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+                      <div className="text-xs text-gray-500 dark:text-gray-400">
+                        Showing {cleanupsPage * CLEANUPS_PER_PAGE + 1}-{Math.min((cleanupsPage + 1) * CLEANUPS_PER_PAGE, cleanupsTotalCount)} of {cleanupsTotalCount}
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => setCleanupsPage(p => Math.max(0, p - 1))}
+                          disabled={cleanupsPage === 0}
+                          className="px-3 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-800"
+                        >
+                          Previous
+                        </button>
+                        <button
+                          onClick={() => setCleanupsPage(p => p + 1)}
+                          disabled={!cleanupsHasMore}
+                          className="px-3 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-800"
+                        >
+                          Next
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Error Display */}
       {error && (
@@ -662,6 +855,64 @@ export function CleanupPanel({ appId }: CleanupPanelProps) {
             </div>
           </div>
         )}
+    </div>
+  );
+}
+
+/**
+ * Status Badge Component
+ */
+function StatusBadge({ status }: { status: string }) {
+  const statusStyles: Record<string, string> = {
+    detecting: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
+    waiting_approval: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200',
+    deleting: 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200',
+    completed: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
+    failed: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200',
+    cancelled: 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200',
+    planning: 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200',
+  };
+
+  const statusLabels: Record<string, string> = {
+    detecting: 'Scanning',
+    waiting_approval: 'Review Needed',
+    deleting: 'Deleting',
+    completed: 'Completed',
+    failed: 'Failed',
+    cancelled: 'Cancelled',
+    planning: 'Planning',
+  };
+
+  return (
+    <span className={`text-xs px-2 py-0.5 rounded font-medium ${statusStyles[status] || statusStyles.planning}`}>
+      {statusLabels[status] || status.replace('_', ' ')}
+    </span>
+  );
+}
+
+/**
+ * Past Cleanup Actions Component
+ */
+function PastCleanupActions({
+  job,
+  onView,
+}: {
+  job: CleanupJobListItem;
+  onView: () => void;
+}) {
+  return (
+    <div className="flex gap-2 items-center">
+      <button
+        onClick={onView}
+        className="px-3 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+      >
+        👁️ View
+      </button>
+      
+      {/* Resume/Retry logic is handled by loading the job into the main view 
+          and letting the useCleanup hook handle state restoration. 
+          Cleanup jobs are simpler than migration jobs (fewer states). 
+      */}
     </div>
   );
 }
