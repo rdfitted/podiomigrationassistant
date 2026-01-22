@@ -191,8 +191,8 @@ export function useItemMigration(options: UseItemMigrationOptions = {}): UseItem
         // Update global context with status
         updateJobStatus('item_migration', data.status as MigrationJobStatus);
 
-        // Stop polling if job is completed or failed
-        if (data.status === 'completed' || data.status === 'failed') {
+        // Stop polling if job is completed, failed, or cancelled
+        if (data.status === 'completed' || data.status === 'failed' || data.status === 'cancelled') {
           setIsPolling(false);
         }
       } catch (innerErr) {
