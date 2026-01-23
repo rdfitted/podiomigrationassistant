@@ -5,8 +5,8 @@
 
 'use client';
 
-import React, { useState } from 'react';
-import { DuplicateGroup, DuplicateItem, CleanupMode } from '@/lib/migration/cleanup/types';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
+import { DuplicateGroup, CleanupMode } from '@/lib/migration/cleanup/types';
 
 export interface DuplicateGroupsPreviewProps {
   groups: DuplicateGroup[];
@@ -27,6 +27,36 @@ export function DuplicateGroupsPreview({
 }: DuplicateGroupsPreviewProps) {
   const [expandedGroups, setExpandedGroups] = useState<Set<number>>(new Set());
   const [selectedGroups, setSelectedGroups] = useState<Set<number>>(new Set());
+
+  // Master checkbox ref for setting indeterminate property (DOM-only, not a React attribute)
+  const masterCheckboxRef = useRef<HTMLInputElement>(null);
+
+  // Derived state for master checkbox tri-state logic
+  const allSelected = useMemo(
+    () => groups.length > 0 && selectedGroups.size === groups.length,
+    [groups.length, selectedGroups.size]
+  );
+
+  const isIndeterminate = useMemo(
+    () => selectedGroups.size > 0 && selectedGroups.size < groups.length,
+    [selectedGroups.size, groups.length]
+  );
+
+  // Sync indeterminate property to DOM (not available as React attribute)
+  useEffect(() => {
+    if (masterCheckboxRef.current) {
+      masterCheckboxRef.current.indeterminate = isIndeterminate;
+    }
+  }, [isIndeterminate]);
+
+  const isManualInteractive = mode === 'manual' && !dryRun;
+
+  let masterCheckboxAriaLabel = 'Select all groups';
+  if (allSelected) {
+    masterCheckboxAriaLabel = 'Deselect all groups';
+  } else if (isIndeterminate) {
+    masterCheckboxAriaLabel = 'Select all groups (some selected)';
+  }
 
   const toggleGroup = (index: number) => {
     const newExpanded = new Set(expandedGroups);
@@ -56,6 +86,15 @@ export function DuplicateGroupsPreview({
     setSelectedGroups(new Set());
   };
 
+  // Master checkbox toggle: if all selected, deselect all; otherwise select all
+  const handleMasterToggle = () => {
+    if (allSelected) {
+      deselectAll();
+    } else {
+      selectAll();
+    }
+  };
+
   const handleExecute = () => {
     if (!onApproveAndExecute) return;
 
@@ -74,7 +113,7 @@ export function DuplicateGroupsPreview({
     .filter((_, idx) => selectedGroups.has(idx))
     .reduce((sum, g) => sum + (g.deleteItemIds?.length || g.items.length - 1), 0);
 
-  const canExecute = mode === 'manual' && !dryRun && selectedGroups.size > 0;
+  const canExecute = isManualInteractive && selectedGroups.size > 0;
 
   return (
     <div className="space-y-4">
@@ -90,21 +129,20 @@ export function DuplicateGroupsPreview({
           </p>
         </div>
 
-        {mode === 'manual' && !dryRun && (
-          <div className="flex gap-2">
-            <button
-              onClick={selectAll}
-              className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
-            >
+        {isManualInteractive && groups.length > 0 && (
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              ref={masterCheckboxRef}
+              type="checkbox"
+              checked={allSelected}
+              onChange={handleMasterToggle}
+              className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700"
+              aria-label={masterCheckboxAriaLabel}
+            />
+            <span className="text-sm text-gray-700 dark:text-gray-300">
               Select All
-            </button>
-            <button
-              onClick={deselectAll}
-              className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
-            >
-              Deselect All
-            </button>
-          </div>
+            </span>
+          </label>
         )}
       </div>
 
@@ -114,9 +152,6 @@ export function DuplicateGroupsPreview({
           const isExpanded = expandedGroups.has(groupIdx);
           const isSelected = selectedGroups.has(groupIdx);
           const itemsToDelete = group.deleteItemIds?.length || group.items.length - 1;
-          const keepItem = group.keepItemId
-            ? group.items.find(i => i.itemId === group.keepItemId)
-            : group.items[0]; // Default to first (oldest) if not specified
 
           return (
             <div
@@ -136,13 +171,14 @@ export function DuplicateGroupsPreview({
                 onClick={() => toggleGroup(groupIdx)}
               >
                 <div className="flex items-center gap-3 flex-1">
-                  {mode === 'manual' && !dryRun && (
+                  {isManualInteractive && (
                     <input
                       type="checkbox"
                       checked={isSelected}
                       onChange={() => toggleSelection(groupIdx)}
                       onClick={(e) => e.stopPropagation()}
-                      className="h-4 w-4"
+                      className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700"
+                      aria-label={`Select group with match value ${group.matchValue}`}
                     />
                   )}
                   <div className="flex-1">
@@ -180,7 +216,6 @@ export function DuplicateGroupsPreview({
                       const isKeep = group.keepItemId
                         ? item.itemId === group.keepItemId
                         : itemIdx === 0;
-                      const willDelete = !isKeep;
 
                       return (
                         <div
@@ -226,7 +261,7 @@ export function DuplicateGroupsPreview({
       </div>
 
       {/* Action Buttons */}
-      {mode === 'manual' && !dryRun && (
+      {isManualInteractive && (
         <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
           <div className="flex items-center justify-between mb-3">
             <div className="text-sm text-gray-700 dark:text-gray-300">
