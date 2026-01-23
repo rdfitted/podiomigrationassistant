@@ -109,30 +109,47 @@ export class CleanupExecutor extends EventEmitter {
         matchField: this.config.matchField,
         mode: this.config.mode,
         dryRun: this.config.dryRun,
+        hasApprovedGroups: !!(this.config.approvedGroups && this.config.approvedGroups.length > 0),
       });
 
-      // Update job status to detecting
-      await migrationStateStore.updateJobStatus(this.jobId, 'detecting' as any);
+      // OPTIMIZATION: Skip detection if approved groups are already provided
+      // This happens when user clicks "Proceed" after reviewing dry run results
+      let limitedGroups: DuplicateGroup[];
 
-      // Step 1 & 2: Stream items and detect duplicate groups efficiently
-      this.emit('detectStart');
-      const duplicateGroups = await detectDuplicateGroups(
-        this.client,
-        this.config.appId,
-        this.config.matchField,
-        {
+      if (this.config.approvedGroups && this.config.approvedGroups.length > 0) {
+        // Use pre-approved groups - skip expensive re-detection
+        logger.info('Using pre-approved groups, skipping detection', {
           jobId: this.jobId,
-          onPauseCheck: () => this.pauseRequested,
-          filters: this.config.filters,
-        }
-      );
+          approvedGroupsCount: this.config.approvedGroups.length,
+        });
 
-      // Apply max groups limit if specified
-      const limitedGroups = this.config.maxGroups
-        ? duplicateGroups.slice(0, this.config.maxGroups)
-        : duplicateGroups;
+        await migrationStateStore.updateJobStatus(this.jobId, 'in_progress' as any);
+        limitedGroups = this.config.approvedGroups;
+        this.emit('detectComplete', limitedGroups);
+      } else {
+        // No approved groups - run full detection
+        await migrationStateStore.updateJobStatus(this.jobId, 'detecting' as any);
 
-      this.emit('detectComplete', limitedGroups);
+        // Step 1 & 2: Stream items and detect duplicate groups efficiently
+        this.emit('detectStart');
+        const duplicateGroups = await detectDuplicateGroups(
+          this.client,
+          this.config.appId,
+          this.config.matchField,
+          {
+            jobId: this.jobId,
+            onPauseCheck: () => this.pauseRequested,
+            filters: this.config.filters,
+          }
+        );
+
+        // Apply max groups limit if specified
+        limitedGroups = this.config.maxGroups
+          ? duplicateGroups.slice(0, this.config.maxGroups)
+          : duplicateGroups;
+
+        this.emit('detectComplete', limitedGroups);
+      }
 
       // Step 3: Determine which items to delete
       let groupsToProcess: DuplicateGroup[];
